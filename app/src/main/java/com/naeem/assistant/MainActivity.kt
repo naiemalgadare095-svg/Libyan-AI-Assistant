@@ -3,6 +3,7 @@ package com.naeem.assistant
 import android.Manifest
 import android.app.Activity
 import android.app.role.RoleManager
+import androidx.core.content.ContextCompat
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -166,6 +167,24 @@ private fun AssistantScreen(say: (String) -> Unit) {
         if (granted) listen() else reply("إذن الميكروفون مرفوض. تقدر تستخدم الكتابة.")
     }
 
+    fun startBackground() {
+        try {
+            ContextCompat.startForegroundService(context, Intent(context, AssistantBackgroundService::class.java))
+            status = "تم طلب تشغيل خدمة الخلفية. راجع الإشعار؛ الاستماع المستمر لم يُفعّل بعد."
+        } catch (_: Exception) {
+            status = "تعذر تشغيل الخدمة. افتح التطبيق واسمح بالميكروفون ثم حاول مجدداً."
+        }
+    }
+
+    val backgroundMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startBackground() else status = "إذن الميكروفون مطلوب لخدمة الخلفية."
+    }
+    val backgroundNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) status = "إذن الإشعارات مرفوض؛ قد لا يظهر إشعار الخدمة في درج الإشعارات."
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startBackground()
+        else backgroundMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("مساعدي AI — v0.4.0", style = MaterialTheme.typography.headlineMedium)
@@ -197,6 +216,21 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 } else status = "طلب دور المساعد يحتاج Android 10 أو أحدث."
             }) { Text("اختيار مساعدي AI كمساعد افتراضي") }
             Text("الاختيار يتطلب موافقتك. دعم الإيماءات والأزرار يعتمد على نظام الهاتف.")
+            HorizontalDivider()
+            Text("خدمة الخلفية — المرحلة الأولى", style = MaterialTheme.typography.titleMedium)
+            Text("هذه النسخة تشغّل إشعار خدمة قابل للإيقاف، لكنها لا تستمع للميكروفون باستمرار بعد.")
+            Button(onClick = {
+                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    backgroundMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                } else if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    backgroundNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else startBackground()
+            }, modifier = Modifier.fillMaxWidth()) { Text("تشغيل خدمة الخلفية") }
+            OutlinedButton(onClick = {
+                context.stopService(Intent(context, AssistantBackgroundService::class.java))
+                status = "تم طلب إيقاف خدمة الخلفية."
+            }) { Text("إيقاف خدمة الخلفية") }
             HorizontalDivider()
             Text("إعدادات الصوت", style = MaterialTheme.typography.titleMedium)
             Text("لغة التعرف على الكلام")
