@@ -57,6 +57,8 @@ private fun AssistantScreen(say: (String) -> Unit) {
     var wakeInput by remember { mutableStateOf(wakeWord) }
     var command by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("جاهز — اكتب أمرك أو اضغط الميكروفون") }
+    var recognitionLanguage by remember { mutableStateOf(prefs.getString("recognition_language", "auto") ?: "auto") }
+    var responseLanguage by remember { mutableStateOf("ar") }
     var speakReplies by remember { mutableStateOf(prefs.getBoolean("speak_replies", true)) }
     var pending by remember { mutableStateOf<ParsedCommand?>(null) }
 
@@ -69,7 +71,12 @@ private fun AssistantScreen(say: (String) -> Unit) {
         if (result.resultCode == Activity.RESULT_OK) {
             val recognized = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
             command = recognized
-            reply(if (recognized.isBlank()) "ما سمعتش أمراً واضحاً." else "سمعتك. راجع الكلام واضغط تنفيذ الأمر.")
+            responseLanguage = detectLanguage(recognized, recognitionLanguage)
+            reply(if (recognized.isBlank()) "ما سمعتش أمراً واضحاً." else when(responseLanguage) {
+                "en" -> "I heard you. Check the text and tap Execute."
+                "fr" -> "Je vous ai entendu. Vérifiez le texte et appuyez sur Exécuter."
+                else -> "سمعتك. راجع الكلام واضغط تنفيذ الأمر."
+            })
         } else reply("لم يتم التعرف على الكلام أو تم إلغاء الاستماع.")
     }
 
@@ -77,8 +84,13 @@ private fun AssistantScreen(say: (String) -> Unit) {
         try {
             speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-LY")
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-LY")
+                if (recognitionLanguage != "auto") {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
+                } else {
+                    // Recognition provider support varies; no guaranteed automatic detection.
+                    putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                }
                 putExtra(RecognizerIntent.EXTRA_PROMPT, "شن تبي نديرلك؟")
             })
         } catch (_: Exception) { reply("خدمة التعرف على الكلام مش متوفرة على الجهاز.") }
@@ -90,7 +102,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.2", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.2.1", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
@@ -102,20 +114,32 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 val normalized = command.trim().removePrefix(wakeWord).trim().removePrefix("،").trim()
                 val parsed = CommandParser.parse(normalized)
                 when (parsed.action) {
-                    Action.UNKNOWN -> reply("الأمر مش واضح. جرّب منبه بوقت محدد، افتح يوتيوب أو واتساب.")
+                    Action.UNKNOWN -> reply(when (responseLanguage) {
+                        "en" -> "I couldn't understand. Try setting an alarm or opening YouTube or WhatsApp."
+                        "fr" -> "Je n'ai pas compris. Essayez une alarme ou ouvrez YouTube ou WhatsApp."
+                        else -> "الأمر مش واضح. جرّب منبه بوقت محدد، افتح يوتيوب أو واتساب."
+                    })
                     Action.ALARM -> try {
                         context.startActivity(Intent(AlarmClock.ACTION_SET_ALARM).apply {
                             putExtra(AlarmClock.EXTRA_HOUR, parsed.hour!!)
                             putExtra(AlarmClock.EXTRA_MINUTES, parsed.minute!!)
                             putExtra(AlarmClock.EXTRA_MESSAGE, "منبه مساعدي AI")
                         })
-                        reply("أرسلت طلب المنبه لتطبيق الساعة. تأكد إنه انحفظ.")
+                        reply(when (responseLanguage) {
+                            "en" -> "Alarm request sent to Clock. Please confirm it was saved."
+                            "fr" -> "Demande d'alarme envoyée. Vérifiez qu'elle est enregistrée."
+                            else -> "أرسلت طلب المنبه لتطبيق الساعة. تأكد إنه انحفظ."
+                        })
                     } catch (_: Exception) { reply("ما قدرتش نفتح تطبيق الساعة.") }
                     Action.YOUTUBE, Action.WHATSAPP -> {
                         val pkg = if (parsed.action == Action.YOUTUBE) "com.google.android.youtube" else "com.whatsapp"
                         val intent = context.packageManager.getLaunchIntentForPackage(pkg)
                         if (intent == null) reply("التطبيق مش مثبت أو مش متاح للفتح.")
-                        else try { context.startActivity(intent); reply("فتحت التطبيق.") }
+                        else try { context.startActivity(intent); reply(when (responseLanguage) {
+                            "en" -> "Opened the app."
+                            "fr" -> "Application ouverte."
+                            else -> "فتحت التطبيق."
+                        }) }
                         catch (_: Exception) { reply("ما قدرتش نفتح التطبيق.") }
                     }
                     else -> { pending = parsed; reply("هذه العملية تحتاج موافقتك. مش حنبعت أو نتصل تلقائياً.") }
@@ -124,6 +148,18 @@ private fun AssistantScreen(say: (String) -> Unit) {
             Text(status, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
             HorizontalDivider()
             Text("إعدادات الصوت", style = MaterialTheme.typography.titleMedium)
+            Text("لغة التعرف على الكلام")
+            val languages = listOf("auto" to "تلقائي", "ar-LY" to "العربية الليبية", "en-US" to "English", "fr-FR" to "Français")
+            languages.forEach { (code, label) ->
+                Row {
+                    RadioButton(selected = recognitionLanguage == code, onClick = {
+                        recognitionLanguage = code
+                        prefs.edit().putString("recognition_language", code).apply()
+                    })
+                    Text(label)
+                }
+            }
+            Text("الوضع التلقائي يعتمد على دعم خدمة التعرف على الكلام في الهاتف؛ إذا لم يعمل، اختر اللغة يدوياً.")
             OutlinedTextField(value = wakeInput, onValueChange = { wakeInput = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("كلمة الاستدعاء") }, singleLine = true)
             OutlinedButton(onClick = {
@@ -157,4 +193,14 @@ private fun AssistantScreen(say: (String) -> Unit) {
             }
         }
     }
+}
+
+private fun detectLanguage(text: String, selected: String): String {
+    if (selected.startsWith("en")) return "en"
+    if (selected.startsWith("fr")) return "fr"
+    if (selected.startsWith("ar")) return "ar"
+    if (text.any { it in '\u0600'..'\u06FF' }) return "ar"
+    val lower = text.lowercase(Locale.ROOT)
+    if (Regex("\\b(ouvre|ouvrir|mets|réveille|alarme|une|heure|demain|appelle)\\b").containsMatchIn(lower)) return "fr"
+    return if (text.isNotBlank()) "en" else "ar"
 }

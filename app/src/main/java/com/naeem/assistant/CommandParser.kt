@@ -29,6 +29,18 @@ object CommandParser {
             if (("الصبح" in s || "صباح" in s) && hour == 12) hour = 0
             return ParsedCommand(Action.ALARM, hour, minute, input)
         }
+        if (Regex("\\b(alarm|wake me|set an alarm|alarme|réveille|reveil)\\b").containsMatchIn(s)) {
+            val match = Regex("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm|h)?").find(s)
+            if (match != null) {
+                var hour = match.groupValues[1].toInt()
+                val minute = match.groupValues[2].toIntOrNull() ?: 0
+                val suffix = match.groupValues[3]
+                if (suffix == "pm" && hour in 1..11) hour += 12
+                if (suffix == "am" && hour == 12) hour = 0
+                if (hour in 0..23 && minute in 0..59) return ParsedCommand(Action.ALARM, hour, minute, input)
+            }
+            return ParsedCommand(Action.UNKNOWN)
+        }
         if ("يوتيوب" in s || "youtube" in s) return ParsedCommand(Action.YOUTUBE)
         if ("واتساب" in s || "whatsapp" in s) return ParsedCommand(Action.WHATSAPP)
         if ("اتصل" in s || "رن على" in s) return ParsedCommand(Action.DIAL)
