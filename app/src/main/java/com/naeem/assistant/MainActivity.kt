@@ -66,6 +66,8 @@ private fun AssistantScreen(say: (String) -> Unit) {
     var responseLanguage by remember { mutableStateOf("ar") }
     var speakReplies by remember { mutableStateOf(prefs.getBoolean("speak_replies", true)) }
     var pending by remember { mutableStateOf<ParsedCommand?>(null) }
+    var pendingAt by remember { mutableLongStateOf(0L) }
+    var history by remember { mutableStateOf(prefs.getString("command_history", "") ?: "") }
     var listening by remember { mutableStateOf(false) }
     var lastCommand by remember { mutableStateOf("") }
     var lastCommandAt by remember { mutableLongStateOf(0L) }
@@ -87,6 +89,8 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 }
                 lastCommand = normalized
                 lastCommandAt = now
+                history = (java.time.LocalDateTime.now().toString().take(19) + " — " + normalized + "\n" + history).take(3500)
+                prefs.edit().putString("command_history", history).apply()
                 val parsed = CommandParser.parse(normalized)
                 when (parsed.action) {
                     Action.UNKNOWN -> reply(when (responseLanguage) {
@@ -117,7 +121,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
                         }) }
                         catch (_: Exception) { reply("ما قدرتش نفتح التطبيق.") }
                     }
-                    else -> { pending = parsed; reply("هذه العملية تحتاج موافقتك. مش حنبعت أو نتصل تلقائياً.") }
+                    else -> { pending = parsed; pendingAt = SystemClock.elapsedRealtime(); reply("هذه العملية تحتاج موافقتك. مش حنبعت أو نتصل تلقائياً.") }
                 }
     }
 
@@ -190,7 +194,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.4.1", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.4.2", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
@@ -279,6 +283,11 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { pending = null; reply("تم الإلغاء.") }) { Text("إلغاء") }
                     Button(onClick = {
+                        if (SystemClock.elapsedRealtime() - pendingAt > 60000L) {
+                            pending = null
+                            reply("انتهت مهلة الموافقة. عاود الطلب.")
+                            return@Button
+                        }
                         val number = Regex("(?:\\+|00)?[0-9][0-9\\s-]{5,18}[0-9]")
                             .find(pending?.message.orEmpty())?.value
                             ?.replace(Regex("[\\s-]"), "")?.let { if (it.startsWith("00")) "+" + it.drop(2) else it }
@@ -292,6 +301,11 @@ private fun AssistantScreen(say: (String) -> Unit) {
                     }) { Text("فتح التطبيق") }
                 }
             }
+            HorizontalDivider()
+            Text("سجل الأوامر المحلي", style = MaterialTheme.typography.titleMedium)
+            Text("السجل محفوظ على الجهاز ويحتوي نص الأوامر؛ امسحه لو يحتوي بيانات خاصة.")
+            Text(history.ifBlank { "لا توجد أوامر مسجلة." })
+            OutlinedButton(onClick = { history = ""; prefs.edit().remove("command_history").apply(); reply("تم مسح السجل.") }) { Text("مسح السجل") }
         }
     }
 }
