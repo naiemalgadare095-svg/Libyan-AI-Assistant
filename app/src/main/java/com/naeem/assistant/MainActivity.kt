@@ -69,51 +69,8 @@ private fun AssistantScreen(say: (String) -> Unit) {
         if (speakReplies) say(message)
     }
 
-    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val recognized = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
-            command = recognized
-            responseLanguage = detectLanguage(recognized, recognitionLanguage)
-            reply(if (recognized.isBlank()) "ما سمعتش أمراً واضحاً." else when(responseLanguage) {
-                "en" -> "I heard you. Check the text and tap Execute."
-                "fr" -> "Je vous ai entendu. Vérifiez le texte et appuyez sur Exécuter."
-                else -> "سمعتك. راجع الكلام واضغط تنفيذ الأمر."
-            })
-        } else reply("لم يتم التعرف على الكلام أو تم إلغاء الاستماع.")
-    }
-
-    fun listen() {
-        try {
-            speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                if (recognitionLanguage != "auto") {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
-                } else {
-                    // Recognition provider support varies; no guaranteed automatic detection.
-                    putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
-                }
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "شن تبي نديرلك؟")
-            })
-        } catch (_: Exception) { reply("خدمة التعرف على الكلام مش متوفرة على الجهاز.") }
-    }
-
-    val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) listen() else reply("إذن الميكروفون مرفوض. تقدر تستخدم الكتابة.")
-    }
-
-    MaterialTheme {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.2.2", style = MaterialTheme.typography.headlineMedium)
-            Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
-            OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
-                label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
-            Button(onClick = {
-                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen()
-                else microphone.launch(Manifest.permission.RECORD_AUDIO)
-            }, modifier = Modifier.fillMaxWidth()) { Text("🎙️ تحدث") }
-            Button(onClick = {
-                val normalized = command.trim().removePrefix(wakeWord).trim().removePrefix("،").trim()
+    fun executeCommand(raw: String) {
+                val normalized = raw.trim().removePrefix(wakeWord).trim().removePrefix("،").trim()
                 val parsed = CommandParser.parse(normalized)
                 when (parsed.action) {
                     Action.UNKNOWN -> reply(when (responseLanguage) {
@@ -146,7 +103,49 @@ private fun AssistantScreen(say: (String) -> Unit) {
                     }
                     else -> { pending = parsed; reply("هذه العملية تحتاج موافقتك. مش حنبعت أو نتصل تلقائياً.") }
                 }
-            }, modifier = Modifier.fillMaxWidth()) { Text("تنفيذ الأمر") }
+    }
+
+    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val recognized = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
+            command = recognized
+            responseLanguage = detectLanguage(recognized, recognitionLanguage)
+            if (recognized.isBlank()) reply("ما سمعتش أمراً واضحاً.")
+            else executeCommand(recognized)
+        } else reply("لم يتم التعرف على الكلام أو تم إلغاء الاستماع.")
+    }
+
+    fun listen() {
+        try {
+            speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                if (recognitionLanguage != "auto") {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
+                } else {
+                    // Recognition provider support varies; no guaranteed automatic detection.
+                    putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                }
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "شن تبي نديرلك؟")
+            })
+        } catch (_: Exception) { reply("خدمة التعرف على الكلام مش متوفرة على الجهاز.") }
+    }
+
+    val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) listen() else reply("إذن الميكروفون مرفوض. تقدر تستخدم الكتابة.")
+    }
+
+    MaterialTheme {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("مساعدي AI — v0.3.0", style = MaterialTheme.typography.headlineMedium)
+            Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
+            OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
+                label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
+            Button(onClick = {
+                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen()
+                else microphone.launch(Manifest.permission.RECORD_AUDIO)
+            }, modifier = Modifier.fillMaxWidth()) { Text("🎙️ تحدث") }
+            Button(onClick = { executeCommand(command) }, modifier = Modifier.fillMaxWidth()) { Text("تنفيذ الأمر") }
             Text(status, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
             HorizontalDivider()
             Text("إعدادات الصوت", style = MaterialTheme.typography.titleMedium)
