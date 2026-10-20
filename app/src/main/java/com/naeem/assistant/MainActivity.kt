@@ -141,8 +141,13 @@ private fun AssistantScreen(say: (String) -> Unit) {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
                 } else {
-                    // Recognition provider support varies; no guaranteed automatic detection.
-                    putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                    // Arabic fallback: providers may ignore language detection.
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-LY")
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-LY")
+                    if (android.os.Build.VERSION.SDK_INT >= 34) {
+                        putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true)
+                        putStringArrayListExtra("android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES", arrayListOf("ar-LY", "ar", "en-US", "fr-FR"))
+                    }
                 }
                 putExtra(RecognizerIntent.EXTRA_PROMPT, "شن تبي نديرلك؟")
             })
@@ -158,7 +163,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.3.1", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.3.2", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
@@ -171,7 +176,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
             HorizontalDivider()
             Text("إعدادات الصوت", style = MaterialTheme.typography.titleMedium)
             Text("لغة التعرف على الكلام")
-            val languages = listOf("auto" to "تلقائي", "ar-LY" to "العربية الليبية", "en-US" to "English", "fr-FR" to "Français")
+            val languages = listOf("auto" to "تلقائي (العربية افتراضياً)", "ar-LY" to "العربية الليبية", "en-US" to "English", "fr-FR" to "Français")
             languages.forEach { (code, label) ->
                 Row {
                     RadioButton(selected = recognitionLanguage == code, onClick = {
@@ -181,7 +186,14 @@ private fun AssistantScreen(say: (String) -> Unit) {
                     Text(label)
                 }
             }
-            Text("الوضع التلقائي يعتمد على دعم خدمة التعرف على الكلام في الهاتف؛ إذا لم يعمل، اختر اللغة يدوياً.")
+            Text("في الوضع التلقائي تُفضّل العربية الليبية. دعم اكتشاف اللغة يعتمد على محرك الهاتف.")
+            OutlinedButton(onClick = {
+                val available = android.speech.SpeechRecognizer.isRecognitionAvailable(context)
+                val apiReady = android.os.Build.VERSION.SDK_INT >= 34
+                status = "خدمة التعرف: " + (if (available) "متوفرة. " else "غير متوفرة. ") +
+                    (if (apiReady) "واجهة اكتشاف اللغة موجودة. " else "واجهة اكتشاف اللغة تحتاج Android 14+. ") +
+                    "هذا لا يؤكد دعم المحرك للاكتشاف التلقائي؛ اختبر اللغتين صوتياً."
+            }) { Text("فحص محرك التعرف الصوتي") }
             OutlinedTextField(value = wakeInput, onValueChange = { wakeInput = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("كلمة الاستدعاء") }, singleLine = true)
             OutlinedButton(onClick = {
