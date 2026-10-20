@@ -2,6 +2,7 @@ package com.naeem.assistant
 
 import android.Manifest
 import android.app.Activity
+import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -119,6 +120,10 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 }
     }
 
+    val assistantRoleRequest = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        status = if (result.resultCode == Activity.RESULT_OK) "تم قبول طلب دور المساعد. جرّب استدعاء مساعد النظام." else "لم يتم اختيار التطبيق كمساعد افتراضي."
+    }
+
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         listening = false
         if (result.resultCode == Activity.RESULT_OK) {
@@ -163,7 +168,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.3.2", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.4.0", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
@@ -173,6 +178,25 @@ private fun AssistantScreen(say: (String) -> Unit) {
             }, enabled = !listening, modifier = Modifier.fillMaxWidth()) { Text(if (listening) "🎙️ جاري الاستماع" else "🎙️ تحدث") }
             Button(onClick = { executeCommand(command) }, modifier = Modifier.fillMaxWidth()) { Text("تنفيذ الأمر") }
             Text(status, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
+            HorizontalDivider()
+            Text("مساعد الهاتف الافتراضي", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val manager = context.getSystemService(RoleManager::class.java)
+                    if (manager != null && manager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+                        if (manager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                            status = "مساعدي AI مختار بالفعل كمساعد افتراضي."
+                        } else {
+                            try {
+                                assistantRoleRequest.launch(manager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
+                            } catch (_: Exception) {
+                                status = "تعذر فتح شاشة اختيار المساعد. راجع إعدادات التطبيقات الافتراضية."
+                            }
+                        }
+                    } else status = "دور المساعد غير متاح من نظام هذا الهاتف."
+                } else status = "طلب دور المساعد يحتاج Android 10 أو أحدث."
+            }) { Text("اختيار مساعدي AI كمساعد افتراضي") }
+            Text("الاختيار يتطلب موافقتك. دعم الإيماءات والأزرار يعتمد على نظام الهاتف.")
             HorizontalDivider()
             Text("إعدادات الصوت", style = MaterialTheme.typography.titleMedium)
             Text("لغة التعرف على الكلام")
