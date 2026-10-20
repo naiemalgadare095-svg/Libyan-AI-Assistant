@@ -170,7 +170,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
     fun startBackground() {
         try {
             ContextCompat.startForegroundService(context, Intent(context, AssistantBackgroundService::class.java))
-            status = "تم طلب تشغيل خدمة الخلفية. راجع الإشعار؛ الاستماع المستمر لم يُفعّل بعد."
+            status = "تم طلب بدء الاستماع التجريبي. راجع إشعار الخدمة."
         } catch (_: Exception) {
             status = "تعذر تشغيل الخدمة. افتح التطبيق واسمح بالميكروفون ثم حاول مجدداً."
         }
@@ -190,7 +190,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.4.0", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.4.1", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
@@ -221,7 +221,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
             Text("الاختيار يتطلب موافقتك. دعم الإيماءات والأزرار يعتمد على نظام الهاتف.")
             HorizontalDivider()
             Text("خدمة الخلفية — المرحلة الأولى", style = MaterialTheme.typography.titleMedium)
-            Text("هذه النسخة تشغّل إشعار خدمة قابل للإيقاف، لكنها لا تستمع للميكروفون باستمرار بعد.")
+            Text("اختبار تجريبي لكلمة «يا مساعدي» عبر محرك Android. قد يتوقف مع قفل الشاشة أو بعد مهلة؛ لا ينفذ أوامر تلقائياً. قد يستخدم محرك الهاتف الإنترنت.")
             Button(onClick = {
                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                     backgroundMicrophone.launch(Manifest.permission.RECORD_AUDIO)
@@ -229,7 +229,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
                     context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                     backgroundNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else startBackground()
-            }, modifier = Modifier.fillMaxWidth()) { Text("تشغيل خدمة الخلفية") }
+            }, modifier = Modifier.fillMaxWidth()) { Text("بدء اختبار يا مساعدي في الخلفية") }
             OutlinedButton(onClick = {
                 context.stopService(Intent(context, AssistantBackgroundService::class.java))
                 status = "تم طلب إيقاف خدمة الخلفية."
