@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import android.os.SystemClock
 
 class MainActivity : ComponentActivity() {
     private var speaker: TextToSpeech? = null
@@ -63,6 +64,9 @@ private fun AssistantScreen(say: (String) -> Unit) {
     var responseLanguage by remember { mutableStateOf("ar") }
     var speakReplies by remember { mutableStateOf(prefs.getBoolean("speak_replies", true)) }
     var pending by remember { mutableStateOf<ParsedCommand?>(null) }
+    var listening by remember { mutableStateOf(false) }
+    var lastCommand by remember { mutableStateOf("") }
+    var lastCommandAt by remember { mutableLongStateOf(0L) }
 
     fun reply(message: String) {
         status = message
@@ -70,7 +74,17 @@ private fun AssistantScreen(say: (String) -> Unit) {
     }
 
     fun executeCommand(raw: String) {
-                val normalized = raw.trim().removePrefix(wakeWord).trim().removePrefix("،").trim()
+                val normalized = raw.trim().let { text ->
+                    if (text.startsWith(wakeWord, ignoreCase = true)) text.drop(wakeWord.length).trim() else text
+                }.trimStart('،', ',', ' ')
+                if (normalized.isBlank()) { reply("قوللي شن تبي نديرلك."); return }
+                val now = SystemClock.elapsedRealtime()
+                if (normalized.equals(lastCommand, ignoreCase = true) && now - lastCommandAt < 1500L) {
+                    reply("الأمر تكرر بسرعة؛ استنى لحظة وعاود جرّب.")
+                    return
+                }
+                lastCommand = normalized
+                lastCommandAt = now
                 val parsed = CommandParser.parse(normalized)
                 when (parsed.action) {
                     Action.UNKNOWN -> reply(when (responseLanguage) {
@@ -106,6 +120,7 @@ private fun AssistantScreen(say: (String) -> Unit) {
     }
 
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        listening = false
         if (result.resultCode == Activity.RESULT_OK) {
             val recognized = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
             command = recognized
@@ -116,7 +131,10 @@ private fun AssistantScreen(say: (String) -> Unit) {
     }
 
     fun listen() {
+        if (listening) { reply("الاستماع شغال بالفعل."); return }
         try {
+            listening = true
+            status = "نسمع فيك..."
             speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 if (recognitionLanguage != "auto") {
@@ -128,7 +146,10 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 }
                 putExtra(RecognizerIntent.EXTRA_PROMPT, "شن تبي نديرلك؟")
             })
-        } catch (_: Exception) { reply("خدمة التعرف على الكلام مش متوفرة على الجهاز.") }
+        } catch (_: Exception) {
+            listening = false
+            reply("خدمة التعرف على الكلام مش متوفرة. جرّب الكتابة أو راجع خدمة Google Speech.")
+        }
     }
 
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -137,14 +158,14 @@ private fun AssistantScreen(say: (String) -> Unit) {
 
     MaterialTheme {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.3.0", style = MaterialTheme.typography.headlineMedium)
+            Text("مساعدي AI — v0.3.1", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)
             Button(onClick = {
                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen()
                 else microphone.launch(Manifest.permission.RECORD_AUDIO)
-            }, modifier = Modifier.fillMaxWidth()) { Text("🎙️ تحدث") }
+            }, enabled = !listening, modifier = Modifier.fillMaxWidth()) { Text(if (listening) "🎙️ جاري الاستماع" else "🎙️ تحدث") }
             Button(onClick = { executeCommand(command) }, modifier = Modifier.fillMaxWidth()) { Text("تنفيذ الأمر") }
             Text(status, textAlign = TextAlign.Right, modifier = Modifier.fillMaxWidth())
             HorizontalDivider()
@@ -180,13 +201,19 @@ private fun AssistantScreen(say: (String) -> Unit) {
                 })
             }
             if (pending != null) {
-                Text("إجراء تواصل: راجع الطلب قبل فتح التطبيق.")
+                Text("إجراء تواصل: راجع الطلب قبل فتح التطبيق. لن يتم إجراء اتصال أو إرسال رسالة تلقائياً.")
+                Text("الطلب: ${pending?.message.orEmpty()}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { pending = null; reply("تم الإلغاء.") }) { Text("إلغاء") }
                     Button(onClick = {
-                        val intent = if (pending?.action == Action.DIAL) Intent(Intent.ACTION_DIAL, Uri.parse("tel:"))
-                        else Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:"))
-                        try { context.startActivity(intent); reply("فتحت تطبيق التواصل. اختار المستلم وأكمل بنفسك.") }
+                        val number = Regex("(?:\\+|00)?[0-9][0-9\\s-]{5,18}[0-9]")
+                            .find(pending?.message.orEmpty())?.value
+                            ?.replace(Regex("[\\s-]"), "")?.let { if (it.startsWith("00")) "+" + it.drop(2) else it }
+                            .orEmpty()
+                        val intent = if (pending?.action == Action.DIAL)
+                            Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))
+                        else Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", number, null))
+                        try { context.startActivity(intent); reply("فتحت تطبيق التواصل. راجع المستلم وأكمل بنفسك.") }
                         catch (_: Exception) { reply("ما قدرتش نفتح تطبيق التواصل.") }
                         pending = null
                     }) { Text("فتح التطبيق") }

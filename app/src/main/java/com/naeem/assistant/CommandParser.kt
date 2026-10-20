@@ -15,18 +15,18 @@ object CommandParser {
 
     fun parse(input: String): ParsedCommand {
         val s = normalize(input)
-        if (listOf("منبه", "نبهني", "ديرلي منبه", "ضبط المنبه").any { it in s }) {
+        if (listOf("منبه", "نبهني", "ديرلي منبه", "ضبط المنبه", "دير alarm", "اضبط alarm", "حط alarm", "ديرلي alarm", "نبي alarm").any { it in s }) {
             val clock = Regex("(\\d{1,2})[:٫.](\\d{1,2})").find(s)
             val hourRaw = clock?.groupValues?.get(1)?.toIntOrNull()
-                ?: Regex("(?:الساعه|ساعة|الساعة)\\s*(\\d{1,2})").find(s)?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("(?:الساعه|ساعة|الساعة|at)\\s*(\\d{1,2})").find(s)?.groupValues?.get(1)?.toIntOrNull()
                 ?: listOf("ستة" to 6, "سته" to 6, "سبعة" to 7, "سبعه" to 7, "ثمانية" to 8, "تسعة" to 9, "خمسة" to 5).firstOrNull { it.first in s }?.second
             if (hourRaw == null || hourRaw !in 0..23) return ParsedCommand(Action.UNKNOWN)
             val minute = clock?.groupValues?.get(2)?.toIntOrNull()
-                ?: if ("ونص" in s || "ونصف" in s) 30 else if ("وربع" in s) 15 else 0
+                ?: if ("ونص" in s || "ونصف" in s || "half" in s) 30 else if ("وربع" in s || "quarter" in s) 15 else 0
             if (minute !in 0..59) return ParsedCommand(Action.UNKNOWN)
             var hour = hourRaw
-            if (("المساء" in s || "بالليل" in s || "العشية" in s) && hour in 1..11) hour += 12
-            if (("الصبح" in s || "صباح" in s) && hour == 12) hour = 0
+            if (("المساء" in s || "بالليل" in s || "العشية" in s || "pm" in s) && hour in 1..11) hour += 12
+            if (("الصبح" in s || "صباح" in s || "am" in s) && hour == 12) hour = 0
             return ParsedCommand(Action.ALARM, hour, minute, input)
         }
         if (Regex("\\b(alarm|wake me|set an alarm|alarme|réveille|reveil)\\b").containsMatchIn(s)) {
