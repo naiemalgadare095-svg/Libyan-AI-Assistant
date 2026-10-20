@@ -14,6 +14,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -101,8 +103,8 @@ private fun AssistantScreen(say: (String) -> Unit) {
     }
 
     MaterialTheme {
-        Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("مساعدي AI — v0.2.1", style = MaterialTheme.typography.headlineMedium)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("مساعدي AI — v0.2.2", style = MaterialTheme.typography.headlineMedium)
             Text("تجربة صوتية محلية. التعرف على الكلام قد يستخدم خدمة إنترنت حسب إعدادات هاتفك.")
             OutlinedTextField(value = command, onValueChange = { command = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("قول أو اكتب: يا مساعدي ديرلي منبه الساعة 6:30") }, minLines = 2)

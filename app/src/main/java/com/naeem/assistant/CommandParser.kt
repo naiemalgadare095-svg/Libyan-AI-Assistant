@@ -41,9 +41,9 @@ object CommandParser {
             }
             return ParsedCommand(Action.UNKNOWN)
         }
-        if ("يوتيوب" in s || "youtube" in s) return ParsedCommand(Action.YOUTUBE)
-        if ("واتساب" in s || "whatsapp" in s) return ParsedCommand(Action.WHATSAPP)
-        if ("اتصل" in s || "رن على" in s) return ParsedCommand(Action.DIAL)
+        if (listOf("يوتيوب", "يوتوب", "youtube").any { it in s }) return ParsedCommand(Action.YOUTUBE)
+        if (listOf("واتساب", "واتس اب", "الواتس", "الواتساب", "whatsapp", "whatsup").any { it in s }) return ParsedCommand(Action.WHATSAPP)
+        if (listOf("اتصل", "رن على", "كلم", "call ").any { it in s }) return ParsedCommand(Action.DIAL)
         if ("رسالة" in s || "اس ام اس" in s || "sms" in s) return ParsedCommand(Action.SMS)
         return ParsedCommand(Action.UNKNOWN)
     }
