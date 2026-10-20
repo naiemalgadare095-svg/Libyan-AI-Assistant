@@ -24,6 +24,10 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
+import android.content.res.ColorStateList
+import android.graphics.drawable.RippleDrawable
+import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.DateFormat
@@ -33,7 +37,15 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private lateinit var root: LinearLayout
+    private lateinit var content: LinearLayout
+    private lateinit var taskCard: LinearLayout
+    private lateinit var progress: TextView
+    private lateinit var historyCards: LinearLayout
+    private lateinit var voiceHint: TextView
     private lateinit var input: EditText
+    private val pages=mutableListOf<ScrollView>()
+    private val navButtons=mutableListOf<Button>()
+    private var selectedPage=0
     private lateinit var status: TextView
     private lateinit var preview: TextView
     private lateinit var history: TextView
@@ -57,8 +69,8 @@ class MainActivity : Activity() {
     private var planGeneration=0
     private data class Contact(val name:String,val phone:String)
     private data class Pending(val id:String,val step:ParsedCommand,val contact:Contact)
-    private val navy=Color.rgb(15,30,47)
-    private val teal=Color.rgb(23,192,172)
+    private val navy=Color.rgb(10,18,29)
+    private val teal=Color.rgb(74,224,193)
     private val white=Color.rgb(231,240,245)
     private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
     private fun locked()=(getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked
@@ -85,74 +97,194 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onDestroy() { if(::voice.isInitialized)voice.close();contactsWorker.shutdownNow();handler.removeCallbacksAndMessages(null);super.onDestroy() }
-    private fun label(text:String,size:Float=16f)=TextView(this).apply { this.text=text;textSize=size;setTextColor(white);setPadding(0,dp(6),0,dp(6)) }
-    private fun button(text:String,click:()->Unit)=Button(this).apply {
-        this.text=text;isAllCaps=false;setTextColor(navy);backgroundTintList=android.content.res.ColorStateList.valueOf(teal)
-        setOnClickListener{click()};minHeight=dp(48)
+    private val muted=Color.rgb(159,179,197)
+    private val surface=Color.rgb(20,34,50)
+    private val line=Color.rgb(41,61,80)
+    private fun shape(color:Int,radius:Int=20,stroke:Int?=null)=GradientDrawable().apply {
+        setColor(color);cornerRadius=dp(radius).toFloat()
+        if(stroke!=null)setStroke(dp(1),stroke)
     }
-    private fun addButton(text:String,click:()->Unit):Button { val b=button(text,click);root.addView(b,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(7) });return b }
-    private fun toggle(text:String,key:String,default:Boolean):Switch {
-        return Switch(this).apply { this.text=text;setTextColor(white);isChecked=prefs.getBoolean(key,default);setPadding(0,dp(8),0,dp(8));root.addView(this)
+    private fun label(text:String,size:Float=16f)=TextView(this).apply {
+        this.text=text;textSize=size;setTextColor(white);setPadding(0,dp(5),0,dp(5))
+        setLineSpacing(dp(2).toFloat(),1.08f);textDirection=View.TEXT_DIRECTION_FIRST_STRONG
+        importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+    private fun button(text:String,secondary:Boolean=false,click:()->Unit)=Button(this).apply {
+        this.text=text;isAllCaps=false;textSize=15f;setTypeface(null,Typeface.BOLD)
+        setTextColor(if(secondary)white else navy);backgroundTintList=null
+        background=RippleDrawable(ColorStateList.valueOf(Color.argb(45,255,255,255)),shape(if(secondary)surface else teal,14,if(secondary)line else null),null)
+        setPadding(dp(14),dp(12),dp(14),dp(12));minHeight=dp(52);minimumWidth=0
+        setOnClickListener{click()}
+    }
+    private fun addButton(text:String,secondary:Boolean=false,click:()->Unit):Button {
+        val b=button(text,secondary,click)
+        content.addView(b,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(10) });return b
+    }
+    private fun card(parent:LinearLayout=content):LinearLayout=LinearLayout(this).apply {
+        orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(15),dp(18),dp(18));background=shape(surface,22,line)
+        parent.addView(this,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(16) })
+    }
+    private fun heading(parent:LinearLayout,title:String,subtitle:String?=null) {
+        parent.addView(label(title,20f).apply{setTypeface(null,Typeface.BOLD)})
+        if(subtitle!=null)parent.addView(label(subtitle,13f).apply{setTextColor(muted)})
+    }
+    private fun toggle(text:String,key:String,default:Boolean,description:String):Switch {
+        val row=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(8),0,dp(8));content.addView(this)
+        }
+        val copy=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        copy.addView(label(text,15f));copy.addView(label(description,12f).apply{setTextColor(muted)})
+        row.addView(copy,LinearLayout.LayoutParams(0,-2,1f))
+        return Switch(this).apply {
+            contentDescription=text;minHeight=dp(56);minWidth=dp(56);isChecked=prefs.getBoolean(key,default)
+            thumbTintList=ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(teal,muted))
+            trackTintList=ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(Color.rgb(28,103,94),line))
+            row.addView(this)
             setOnCheckedChangeListener { _,checked -> prefs.edit().putBoolean(key,checked).apply();if(::voice.isInitialized)voice.stop();cancelPlan(false) }
         }
     }
-    private fun buildUi() {
-        val scroll=ScrollView(this).apply { setBackgroundColor(navy);isFillViewport=true }
-        root=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(22),dp(28),dp(22),dp(28));layoutDirection=View.LAYOUT_DIRECTION_RTL }
-        scroll.addView(root);setContentView(scroll)
-        scroll.setOnApplyWindowInsetsListener { _,insets ->
-            root.setPadding(dp(22),dp(28)+insets.systemWindowInsetTop,dp(22),dp(28)+insets.systemWindowInsetBottom)
-            insets
+    private fun newPage(frame:FrameLayout):LinearLayout {
+        val inner=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(12),dp(20),dp(24))}
+        val scroll=ScrollView(this).apply{isFillViewport=true;clipToPadding=false;addView(inner);isVerticalScrollBarEnabled=false}
+        pages.add(scroll);frame.addView(scroll,FrameLayout.LayoutParams(-1,-1));return inner
+    }
+    private fun selectPage(page:Int) {
+        if(::input.isInitialized)input.clearFocus()
+        root.requestFocus()
+        selectedPage=page
+        pages.forEachIndexed { i,v -> v.visibility=if(i==page)View.VISIBLE else View.GONE }
+        navButtons.forEachIndexed { i,b ->
+            b.isSelected=i==page;b.setTextColor(if(i==page)teal else muted)
+            b.background=shape(if(i==page)Color.rgb(24,56,59) else navy,14)
         }
-        root.addView(label("مساعدي AI",30f).apply{setTypeface(null,Typeface.BOLD)})
-        root.addView(label("نسخة تجربة 0.5.0 • أوامرك بإذنك",14f).apply{setTextColor(teal)})
-        root.addView(label("اكتب أو تحدّث، راجع الخطة، ثم أكد التواصل. فتح مسودة رسالة لا يعني إرسالها.",15f))
+        if(page!=0 && ::voice.isInitialized)voice.stop()
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(root.windowToken,0)
+    }
+    private fun buildUi() {
+        root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(navy);layoutDirection=View.LAYOUT_DIRECTION_RTL;isFocusableInTouchMode=true}
+        setContentView(root)
+        root.setOnApplyWindowInsetsListener { _,insets ->
+            root.setPadding(insets.systemWindowInsetLeft,insets.systemWindowInsetTop,insets.systemWindowInsetRight,insets.systemWindowInsetBottom);insets
+        }
+        val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(22),dp(12),dp(22),dp(8))}
+        header.addView(label("مساعدي",23f).apply{setTypeface(null,Typeface.BOLD)},LinearLayout.LayoutParams(0,-2,1f))
+        header.addView(label("AI  /  0.5.1",12f).apply{setTextColor(teal);textDirection=View.TEXT_DIRECTION_LTR;setTypeface(Typeface.MONOSPACE,Typeface.NORMAL)})
+        root.addView(header)
+        val frame=FrameLayout(this);root.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
+        val home=newPage(frame);val historyPage=newPage(frame);val settingsPage=newPage(frame)
+        content=home
+        content.addView(label("أوامرك بإذنك",12f).apply{setTextColor(teal);gravity=Gravity.CENTER})
+        content.addView(label("شنو نقدر نساعدك اليوم؟",25f).apply{setTypeface(null,Typeface.BOLD);gravity=Gravity.CENTER})
+        content.addView(label("تحدّث أو اكتب. نرتّب الخطوات، وأنت تختار متى ننفذ.",14f).apply{setTextColor(muted);gravity=Gravity.CENTER})
+        val mic=button("ابدأ الاستماع") {startVoice()}.apply {
+            setCompoundDrawablesRelativeWithIntrinsicBounds(0,com.naeem.assistant.R.drawable.ic_mic,0,0)
+            compoundDrawablePadding=dp(10);textSize=15f;contentDescription="ابدأ الاستماع للأوامر الصوتية"
+            background=RippleDrawable(ColorStateList.valueOf(Color.argb(40,255,255,255)),shape(Color.rgb(22,62,64),38,Color.rgb(42,114,108)),null)
+            setTextColor(teal)
+        }
+        content.addView(mic,LinearLayout.LayoutParams(dp(124),dp(112)).apply{gravity=Gravity.CENTER_HORIZONTAL;topMargin=dp(18);bottomMargin=dp(4)})
+        voiceHint=label("جلسة صوتية داخل التطبيق",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END};content.addView(voiceHint)
+        addButton("إيقاف الصوت وإلغاء الخطة",true){voice.stop();cancelPlan();showStatus("توقف الاستماع وأُلغيت الخطوات المتبقية.",false)}
+        val composer=card()
+        heading(composer,"اكتب طلبك","أوامر واضحة، خطوة بخطوة")
         input=EditText(this).apply {
-            hint="افتح يوتيوب ثم ديرلي منبه الساعة 6:30 الصبح"
-            setHintTextColor(Color.rgb(145,166,186));setTextColor(white);textSize=18f;minLines=2;gravity=Gravity.TOP or Gravity.START
-            background=GradientDrawable().apply {setColor(Color.rgb(27,47,68));cornerRadius=dp(14).toFloat();setStroke(dp(1),Color.rgb(54,88,109))}
-            setPadding(dp(14),dp(14),dp(14),dp(14));root.addView(this,LinearLayout.LayoutParams(-1,-2))
+            id=View.generateViewId();hint="مثلاً: افتح يوتيوب ثم ديرلي منبه الساعة 6:30 الصبح"
+            setHintTextColor(muted);setTextColor(white);textSize=16f;minLines=2;maxLines=6;gravity=Gravity.TOP or Gravity.START
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            background=shape(navy,14,line);setPadding(dp(14),dp(14),dp(14),dp(14))
+            contentDescription="اكتب أمرًا أو عدة أوامر للمساعد"
+            composer.addView(this,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
             addTextChangedListener(object:TextWatcher {
                 override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){}
                 override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){cancelPlan(false)}
                 override fun afterTextChanged(s:Editable?){}
             })
         }
-        language=Spinner(this).apply {
-            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,arrayOf("العربية الليبية • ar-LY","English • en-US"))
-            setBackgroundColor(Color.rgb(225,236,240));root.addView(this)
+        content=composer
+        addButton("راجع خطة الأوامر") {
+            voice.stop();input.clearFocus();(getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0)
+            createPlan(input.text.toString());pages[0].post { pages[0].smoothScrollTo(0,taskCard.top) }
         }
-        offline=toggle("تعرف صوتي محلي فقط (حسب جهازك)","offline",true)
-        continuous=toggle("محادثة متواصلة داخل التطبيق","continuous",false)
-        wake=toggle("تنبيه «يا مساعدي» داخل التطبيق فقط","wake",false)
-        addButton("🎙  ابدأ الاستماع") { startVoice() }
-        addButton("إيقاف الصوت وإلغاء الخطة") { voice.stop();cancelPlan();showStatus("توقف الاستماع وأُلغيت الخطوات المتبقية.",false) }
-        addButton("راجع خطة الأوامر") { voice.stop();createPlan(input.text.toString()) }
-        preview=label("لا توجد خطة نشطة.",16f);root.addView(preview)
-        continueButton=addButton("نفّذ الخطوة التالية") { runNext() }.apply{visibility=View.GONE}
-        confirm=addButton("أكد الإجراء المعروض") { confirmPending() }.apply{visibility=View.GONE}
-        status=label("جاهز. الصوت اختياري؛ يمكنك استخدام الكتابة بلا إنترنت.",16f).apply{setTextColor(teal)};root.addView(status)
-        root.addView(label("الإعداد والخصوصية",21f))
-        addButton("الصلاحيات وحالة الجهاز") { permissionsDialog() }
-        addButton("جهات الاتصال والألقاب") { contactsDialog() }
-        addButton("التحكم بالتطبيقات • Accessibility") { accessibilityDialog() }
-        addButton("أمثلة وحدود النسخة") { infoDialog() }
-        root.addView(label("سجل المهام المحلي",21f))
-        history=label("",14f);root.addView(history)
-        addButton("حذف السجل والألقاب والبيانات المحلية") {
+        content=home
+        content.addView(label("جرّب طلبًا سريعًا",14f).apply{setTextColor(muted);setPadding(0,dp(18),0,dp(4))})
+        val examples=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        listOf("منبّه الصبح" to "ديرلي منبه الساعة 6:30 الصبح","افتح يوتيوب" to "افتح يوتيوب").forEach { (title,command) ->
+            examples.addView(button(title,true){input.setText(command);input.requestFocus()},LinearLayout.LayoutParams(0,-2,1f).apply{marginStart=dp(3);marginEnd=dp(3)})
+        }
+        home.addView(examples)
+        taskCard=card(home);content=taskCard
+        progress=label("خطتك القادمة",18f).apply{setTextColor(teal);setTypeface(null,Typeface.BOLD)};content.addView(progress)
+        preview=label("لا توجد خطة نشطة. اكتب طلبك وراجعه لتظهر الخطوات هنا.",15f).apply{setLineSpacing(dp(8).toFloat(),1.1f)};content.addView(preview)
+        status=label("جاهز. الصوت اختياري؛ يمكنك استخدام الكتابة بلا إنترنت.",14f).apply {
+            setTextColor(muted);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
+            setPadding(0,dp(12),0,dp(8));setTextIsSelectable(true)
+        };content.addView(status)
+        continueButton=addButton("نفّذ الخطوة التالية"){runNext()}.apply{visibility=View.GONE}
+        confirm=addButton("أكد الإجراء المعروض"){confirmPending()}.apply{visibility=View.GONE}
+        addButton("إلغاء الخطة الحالية",true){voice.stop();cancelPlan();showStatus("أُلغيت الخطوات المتبقية.",false)}
+        content.addView(label("لا إرسال تلقائي للرسائل. راجع المستلم والنص داخل التطبيق الآخر.",12f).apply{setTextColor(muted)})
+        content=historyPage
+        heading(content,"سجل مهامك","نشاطك في مكان واحد، محفوظ على جهازك")
+        history=label("",14f).apply{setTextColor(muted)};content.addView(history)
+        historyCards=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};content.addView(historyCards)
+        content=settingsPage
+        heading(content,"إعداداتك","اضبط الصوت والوصول بما يناسبك")
+        val audio=card();content=audio
+        heading(content,"الصوت والمحادثة","الاستماع يعمل أثناء بقاء التطبيق ظاهرًا")
+        content.addView(label("لغة التعرف",14f))
+        language=Spinner(this).apply {
+            contentDescription="لغة التعرف على الكلام"
+            adapter=object:ArrayAdapter<String>(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,arrayOf("العربية الليبية · ar-LY","English · en-US")) {
+                override fun getView(position:Int,convertView:View?,parent:ViewGroup):View=super.getView(position,convertView,parent).also{(it as TextView).setTextColor(white);it.textSize=15f;it.setPadding(dp(12),dp(12),dp(12),dp(12))}
+                override fun getDropDownView(position:Int,convertView:View?,parent:ViewGroup):View=super.getDropDownView(position,convertView,parent).also{(it as TextView).setTextColor(white);it.setBackgroundColor(surface);it.setPadding(dp(14),dp(14),dp(14),dp(14))}
+            }
+            background=shape(navy,12,line);content.addView(this,LinearLayout.LayoutParams(-1,dp(52)))
+            setSelection(prefs.getInt("language",0).coerceIn(0,1))
+            onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent:AdapterView<*>?){}
+                override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long){
+                    if(position!=prefs.getInt("language",0)){prefs.edit().putInt("language",position).apply();if(::voice.isInitialized)voice.stop();cancelPlan(false)}
+                }
+            }
+        }
+        offline=toggle("صوت محلي فقط","offline",true,"حسب توفر محرك اللغة على هاتفك؛ لا تحويل تلقائي للشبكة")
+        continuous=toggle("محادثة متواصلة","continuous",false,"جلسة متعددة الأدوار تنتهي بعد دقيقة خمول")
+        wake=toggle("كلمة التنبيه: يا مساعدي","wake",false,"تجريبية، داخل التطبيق فقط")
+        content=settingsPage
+        val access=card();content=access
+        heading(content,"الوصول والتحكم")
+        addButton("الصلاحيات وحالة الجهاز",true){permissionsDialog()}
+        addButton("جهات الاتصال والألقاب",true){contactsDialog()}
+        addButton("التحكم بالتطبيقات • Accessibility",true){accessibilityDialog()}
+        content=settingsPage
+        val privacy=card();content=privacy
+        heading(content,"خصوصيتك أولًا","لا تُحفظ نصوص الأوامر أو التسجيلات. السجل لا يتضمن محتوى الرسائل أو أرقام المستلمين.")
+        addButton("أمثلة وحدود النسخة",true){infoDialog()}
+        addButton("حذف السجل والألقاب والبيانات المحلية",true){
             AlertDialog.Builder(this).setTitle("حذف البيانات المحلية؟").setMessage("يحذف السجل والألقاب والإعدادات. لا يحذف رسائل أرسلتها من تطبيق آخر.")
-                .setNegativeButton("إلغاء",null).setPositiveButton("حذف") { _,_ ->
-                    voice.stop();cancelPlan(false);prefs.edit().clear().apply();offline.isChecked=true;continuous.isChecked=false;wake.isChecked=false
+                .setNegativeButton("إلغاء",null).setPositiveButton("حذف"){_,_->
+                    voice.stop();cancelPlan(false);prefs.edit().clear().apply();offline.isChecked=true;continuous.isChecked=false;wake.isChecked=false;language.setSelection(0)
                     input.text.clear();updateHistory();showStatus("حُذفت البيانات المحلية.",false)
                 }.show()
+        }.setTextColor(Color.rgb(255,163,163))
+        settingsPage.addView(label("مساعدي AI · 0.5.1-preview\nنسخة تجربة • أوامرك بإذنك",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;setPadding(0,dp(20),0,dp(8))})
+        val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(dp(14),dp(10),dp(14),dp(10));background=shape(navy,0,line)}
+        listOf("المساعد","السجل","الإعدادات").forEachIndexed { i,title ->
+            val b=button(title,true){selectPage(i)}.apply{contentDescription="افتح $title"}
+            navButtons.add(b);nav.addView(b,LinearLayout.LayoutParams(0,-2,1f).apply{marginStart=dp(3);marginEnd=dp(3)})
         }
+        root.addView(nav);content=home;selectPage(0)
     }
     private fun showStatus(message:String,speak:Boolean=true) {
         if(isFinishing || isDestroyed)return
         status.text=message
+        if(::voiceHint.isInitialized)voiceHint.text=message
+        if(selectedPage!=0)Toast.makeText(this,message,Toast.LENGTH_LONG).show()
+        if(::taskCard.isInitialized)taskCard.background=shape(surface,22,if(pending!=null)Color.rgb(243,193,107) else line)
         if(speak && ::voice.isInitialized)voice.say(message)
     }
     private fun startVoice() {
+        selectPage(0)
         if(locked()) { showStatus("افتح قفل الجهاز أولًا.",false);return }
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
             AlertDialog.Builder(this).setTitle("استخدام الميكروفون")
@@ -186,7 +318,11 @@ class MainActivity : Activity() {
         if(log && index<plan.size)record("أُلغيت الخطوات المتبقية")
         planGeneration++;resolving=false;plan=emptyList();index=0;pending=null;gate.invalidate();handler.removeCallbacksAndMessages(null)
         dialog?.dismiss();dialog=null
-        preview.text="لا توجد خطة نشطة.";confirm.visibility=View.GONE;continueButton.visibility=View.GONE
+        progress.text="خطتك القادمة"
+        preview.text="لا توجد خطة نشطة. اكتب طلبك وراجعه لتظهر الخطوات هنا."
+        taskCard.background=shape(surface,22,line)
+        if(::status.isInitialized)status.text="راجع طلبك لبدء خطة جديدة."
+        confirm.visibility=View.GONE;continueButton.visibility=View.GONE
     }
     private fun createPlan(text:String) {
         cancelPlan(false)
@@ -206,6 +342,7 @@ class MainActivity : Activity() {
         else -> "غير مدعوم"
     }
     private fun renderPlan() {
+        progress.text=if(index>=plan.size)"اكتملت الخطة" else "خطتك · ${index+1} من ${plan.size}"
         preview.text=plan.mapIndexed { i,s -> "${if(i<index)"✓" else if(i==index)"◉" else "○"} ${i+1}. ${title(s)}" }.joinToString("\n")
         continueButton.visibility=if(index<plan.size && pending==null)View.VISIBLE else View.GONE
     }
@@ -266,7 +403,8 @@ class MainActivity : Activity() {
         val message="$channel إلى ${contact.name}، الرقم ${contact.phone}. "+
             if(step.action==Action.DIAL)"قل أكد الاتصال أو اضغط التأكيد خلال 30 ثانية. قد تترتب تكلفة، ولا يمكن التراجع عن بدء المكالمة." else "النص: ${step.message}. قل أكد فتح المسودة أو اضغط التأكيد خلال 30 ثانية. الإرسال النهائي يتم منك داخل التطبيق الآخر."
         confirm.text=if(step.action==Action.DIAL)"أكد الاتصال: ${contact.name} • ${contact.phone}" else "أكد فتح المسودة: ${contact.name} • ${contact.phone}"
-        confirm.visibility=View.VISIBLE;showStatus(message)
+        confirm.visibility=View.VISIBLE;progress.setText(R.string.confirmation_waiting);selectPage(0);showStatus(message)
+        pages[0].post{pages[0].smoothScrollTo(0,taskCard.top)}
         handler.postDelayed({if(pending?.id==item.id){pending=null;gate.invalidate();confirm.visibility=View.GONE;renderPlan();showStatus("انتهت مهلة التأكيد؛ لم يتم تنفيذ الإجراء.")}},30_000)
     }
     private fun confirmPending() {
@@ -339,7 +477,16 @@ class MainActivity : Activity() {
         val list=JSONArray(prefs.getString("history","[]")?:"[]");val valid=JSONArray()
         for(i in 0 until list.length()){val item=list.getJSONObject(i);if(System.currentTimeMillis()-item.optLong("time")<30L*24*60*60*1000)valid.put(item)}
         prefs.edit().putString("history",valid.toString()).apply()
-        history.text=(0 until minOf(valid.length(),12)).joinToString("\n\n"){i->val item=valid.getJSONObject(i);DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(Date(item.getLong("time")))+" • "+item.getString("summary")}.ifBlank{"لا توجد مهام محفوظة. لا تُحفظ نصوص الرسائل أو الأرقام في السجل."}
+        history.text=if(valid.length()==0)"لا توجد أنشطة حتى الآن." else "${valid.length()} نشاط محفوظ · آخر 30 يومًا"
+        historyCards.removeAllViews()
+        if(valid.length()==0){
+            val empty=card(historyCards);heading(empty,"بداية جديدة","عندما تراجع خطة أو تنفذ خطوة، يظهر ملخصها هنا. لا تُحفظ نصوص الرسائل أو أرقام المستلمين.")
+        }
+        for(i in 0 until minOf(valid.length(),30)){
+            val item=valid.getJSONObject(i);val entry=card(historyCards)
+            entry.addView(label(item.getString("summary"),15f))
+            entry.addView(label(DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(Date(item.getLong("time"))),12f).apply{setTextColor(muted)})
+        }
     }
     private fun permissionsDialog() {
         voice.stop()

@@ -34,7 +34,7 @@ class MainActivityTest {
     private fun pending():Any? = MainActivity::class.java.getDeclaredField("pending").apply{isAccessible=true}.get(activity)
     private fun smsPlan() { makePlan("send SMS to +218912345678 \"hello\"");button("نفّذ الخطوة").performClick() }
     @Test fun launchesAndShowsHonestVersionAndLocalPrivacy() {
-        assertTrue(text().contains("0.5.0"));assertTrue(text().contains("لا تُحفظ نصوص"))
+        assertTrue(text().contains("0.5.1"));assertTrue(text().contains("لا تُحفظ نصوص"))
     }
     @Test fun planDoesNotLaunchExternalApp() {
         makePlan("افتح يوتيوب ثم افتح واتساب")

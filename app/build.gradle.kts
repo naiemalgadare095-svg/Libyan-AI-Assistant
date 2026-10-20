@@ -9,8 +9,8 @@ android {
         applicationId = "com.naeem.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 50
-        versionName = "0.5.0-preview"
+        versionCode = 51
+        versionName = "0.5.1-preview"
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
     buildTypes { release { isMinifyEnabled = false } }
