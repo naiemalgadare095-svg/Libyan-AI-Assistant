@@ -176,13 +176,16 @@ private fun AssistantScreen(say: (String) -> Unit) {
         }
     }
 
-    val backgroundMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startBackground() else status = "إذن الميكروفون مطلوب لخدمة الخلفية."
-    }
     val backgroundNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) status = "إذن الإشعارات مرفوض؛ قد لا يظهر إشعار الخدمة في درج الإشعارات."
-        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startBackground()
-        else backgroundMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+        startBackground()
+    }
+    val backgroundMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) status = "إذن الميكروفون مطلوب لخدمة الخلفية."
+        else if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            backgroundNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else startBackground()
     }
 
     MaterialTheme {
