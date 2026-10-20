@@ -5,25 +5,40 @@ import org.json.JSONObject
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
+class CloudRequest {
+    @Volatile private var cancelled=false
+    private var connection:HttpsURLConnection?=null
+    @Synchronized fun bind(value:HttpsURLConnection){checkActive();connection=value}
+    @Synchronized fun cancel(){cancelled=true;connection?.disconnect();connection=null}
+    fun checkActive(){if(cancelled || Thread.currentThread().isInterrupted)throw java.util.concurrent.CancellationException()}
+}
+
 /** Text-only client. No screen, contacts, audio, tools or automatic device actions. */
 class CloudAssistant(private val transport:((String,String)->String)?=null) {
     @Volatile private var connection:HttpsURLConnection?=null
     fun cancel(){connection?.disconnect();connection=null}
-    fun answer(key:String,model:String,text:String,context:List<Pair<String,String>>):String {
+    fun answer(key:String,model:String,text:String,context:List<Pair<String,String>>,planning:Boolean=false,request:CloudRequest=CloudRequest()):String {
         require(text.isNotBlank() && text.length<=2000){"اكتب سؤالًا من 1 إلى 2000 حرف."}
         require(Regex("[A-Za-z0-9._-]{1,80}").matches(model)){"اسم النموذج غير صحيح."}
-        val body=payload(model,text,context).toString()
-        val raw=transport?.invoke(key,body)?:send(key,body)
+        request.checkActive()
+        val data=payload(model,text,if(planning)emptyList() else context)
+        if(planning){data.put("max_output_tokens",1200);data.put("instructions",DevicePlan.instructions);data.put("text",JSONObject().put("format",DevicePlan.format()))}
+        val body=data.toString()
+        val raw=transport?.invoke(key,body)?:send(key,body,request)
+        request.checkActive()
         return responseText(raw)
     }
-    private fun send(key:String,body:String):String {
+    private fun send(key:String,body:String,request:CloudRequest):String {
+        request.checkActive()
         val conn=URL("https://api.openai.com/v1/responses").openConnection() as HttpsURLConnection
         connection=conn
         try {
+            request.bind(conn)
             conn.requestMethod="POST";conn.instanceFollowRedirects=false
             conn.connectTimeout=15_000;conn.readTimeout=35_000;conn.doOutput=true
             conn.setRequestProperty("Authorization","Bearer $key")
             conn.setRequestProperty("Content-Type","application/json; charset=utf-8")
+            request.checkActive()
             conn.outputStream.use{it.write(body.toByteArray(Charsets.UTF_8))}
             val code=conn.responseCode
             if(code !in 200..299)throw IllegalStateException(when(code){
@@ -33,7 +48,7 @@ class CloudAssistant(private val transport:((String,String)->String)?=null) {
             })
             return conn.inputStream.bufferedReader().use { reader ->
                 val result=StringBuilder();val buffer=CharArray(4096)
-                while(true){val n=reader.read(buffer);if(n<0)break;result.append(buffer,0,n);if(result.length>262144)throw IllegalStateException("رد الخدمة أكبر من الحد المسموح.")}
+                while(true){request.checkActive();val n=reader.read(buffer);if(n<0)break;result.append(buffer,0,n);if(result.length>262144)throw IllegalStateException("رد الخدمة أكبر من الحد المسموح.")}
                 result.toString()
             }
         } finally {conn.disconnect();if(connection===conn)connection=null}

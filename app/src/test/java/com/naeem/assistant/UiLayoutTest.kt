@@ -34,13 +34,14 @@ class UiLayoutTest {
             val input=views(decor).filterIsInstance<EditText>().first()
             capture("assistant")
             input.setText("افتح يوتيوب")
+            views(decor).filterIsInstance<Button>().first{it.text=="التحكم"}.performClick();capture("controls")
             views(decor).filterIsInstance<Button>().first{it.text=="السجل"}.performClick();capture("history")
             views(decor).filterIsInstance<Button>().first{it.text=="الإعدادات"}.performClick();capture("settings")
             views(decor).filterIsInstance<Button>().first{it.text=="المساعد"}.performClick();layout()
             assertEquals("افتح يوتيوب",input.text.toString())
             assertTrue(input.isShown)
-            val nav=views(decor).filterIsInstance<Button>().filter{it.text in listOf("المساعد","السجل","الإعدادات")}
-            assertEquals(3,nav.size)
+            val nav=views(decor).filterIsInstance<Button>().filter{it.text in listOf("المساعد","التحكم","السجل","الإعدادات")}
+            assertEquals(4,nav.size)
             nav.forEach { assertTrue(it.height>=48*activity.resources.displayMetrics.density);assertTrue(it.isShown) }
         } finally { controller.pause().stop().destroy() }
     }

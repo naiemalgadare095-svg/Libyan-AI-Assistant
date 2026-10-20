@@ -61,7 +61,10 @@ class MainActivity : Activity() {
     private val cloud=CloudAssistant()
     private val cloudWorker=Executors.newSingleThreadExecutor()
     private val chatContext=mutableListOf<Pair<String,String>>()
-    private var cloudGeneration=0
+    @Volatile private var cloudGeneration=0
+    private var cloudRequest:CloudRequest?=null
+    private var executing=false
+    private lateinit var readiness:TextView
     private val tokens by lazy { EncryptedTokenStore(this) }
     private val handler=Handler(Looper.getMainLooper())
     private val gate=ConfirmationGate()
@@ -89,14 +92,16 @@ class MainActivity : Activity() {
         buildUi()
         voice=VoiceSession(this,{message -> showStatus(message,false)},::onSpeech)
         updateHistory()
+        updateReadiness()
     }
     override fun onResume() {
         super.onResume();resumed=true
         if(::voice.isInitialized)voice.foreground(true)
+        updateReadiness()
         if(::preview.isInitialized && plan.isNotEmpty())renderPlan()
     }
     override fun onPause() {
-        resumed=false;planGeneration++;resolving=false
+        resumed=false;planGeneration++;resolving=false;executing=false
         cancelCloud(true)
         gate.invalidate();pending=null;handler.removeCallbacksAndMessages(null)
         if(::confirm.isInitialized)confirm.visibility=View.GONE
@@ -176,13 +181,15 @@ class MainActivity : Activity() {
         }
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(22),dp(12),dp(22),dp(8))}
         header.addView(label("مساعدي",23f).apply{setTypeface(null,Typeface.BOLD)},LinearLayout.LayoutParams(0,-2,1f))
-        header.addView(label("AI  /  0.6.0",12f).apply{setTextColor(teal);textDirection=View.TEXT_DIRECTION_LTR;setTypeface(Typeface.MONOSPACE,Typeface.NORMAL)})
+        header.addView(label("شخصي / 0.7.0",12f).apply{setTextColor(teal);textDirection=View.TEXT_DIRECTION_LTR;setTypeface(Typeface.MONOSPACE,Typeface.NORMAL)})
+        header.addView(button("إيقاف الكل",true){voice.stop();cancelPlan();showStatus("أُوقفت الجلسة وأُلغيت الإجراءات التي لم تُنفذ.",false)},LinearLayout.LayoutParams(dp(82),dp(48)).apply{marginStart=dp(8)})
         root.addView(header)
         val frame=FrameLayout(this);root.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
-        val home=newPage(frame);val historyPage=newPage(frame);val settingsPage=newPage(frame)
+        val home=newPage(frame);val controlPage=newPage(frame);val historyPage=newPage(frame);val settingsPage=newPage(frame)
         content=home
+        readiness=label("",12f).apply{setTextColor(teal);gravity=Gravity.CENTER;setOnClickListener{permissionsDialog()};contentDescription="حالة الصلاحيات والمحركات"};content.addView(readiness)
         content.addView(label("أوامرك بإذنك",12f).apply{setTextColor(teal);gravity=Gravity.CENTER})
-        content.addView(label("شنو نقدر نساعدك اليوم؟",25f).apply{setTypeface(null,Typeface.BOLD);gravity=Gravity.CENTER})
+        content.addView(label("شنو نقدر نساعدك اليوم؟",23f).apply{setTypeface(null,Typeface.BOLD);gravity=Gravity.CENTER})
         content.addView(label("تحدّث أو اكتب. نرتّب الخطوات، وأنت تختار متى ننفذ.",14f).apply{setTextColor(muted);gravity=Gravity.CENTER})
         val mic=button("ابدأ الاستماع") {startVoice()}.apply {
             setCompoundDrawablesRelativeWithIntrinsicBounds(0,com.naeem.assistant.R.drawable.ic_mic,0,0)
@@ -190,7 +197,7 @@ class MainActivity : Activity() {
             background=RippleDrawable(ColorStateList.valueOf(Color.argb(40,255,255,255)),shape(Color.rgb(22,62,64),38,Color.rgb(42,114,108)),null)
             setTextColor(teal)
         }
-        content.addView(mic,LinearLayout.LayoutParams(dp(124),dp(112)).apply{gravity=Gravity.CENTER_HORIZONTAL;topMargin=dp(18);bottomMargin=dp(4)})
+        content.addView(mic,LinearLayout.LayoutParams(dp(110),dp(98)).apply{gravity=Gravity.CENTER_HORIZONTAL;topMargin=dp(18);bottomMargin=dp(4)})
         voiceHint=label("جلسة صوتية داخل التطبيق",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END};content.addView(voiceHint)
         addButton("إيقاف الصوت وإلغاء الخطة",true){voice.stop();cancelPlan();showStatus("توقف الاستماع وأُلغيت الخطوات المتبقية.",false)}
         val composer=card()
@@ -214,6 +221,7 @@ class MainActivity : Activity() {
             createPlan(input.text.toString());pages[0].post { pages[0].smoothScrollTo(0,taskCard.top) }
         }
         addButton("اسأل AI عن هذا النص",true){requestAi(input.text.toString())}
+        addButton("اقترح خطة للتحكم بواسطة AI",true){requestAi(input.text.toString(),true)}
         content=home
         content.addView(label("جرّب طلبًا سريعًا",14f).apply{setTextColor(muted);setPadding(0,dp(18),0,dp(4))})
         val examples=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
@@ -237,6 +245,19 @@ class MainActivity : Activity() {
         heading(content,"محادثة AI","عبر الإنترنت بإذنك؛ لا تنفذ ردود AI إجراءات على الجهاز")
         aiReply=label("اسأل من محرر الطلب. تُرسل رسالتك بعد موافقة منفصلة، وتبقى الأوامر الأساسية محلية.",15f).apply{setTextIsSelectable(true);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE};content.addView(aiReply)
         addButton("مسح سياق المحادثة",true){cancelCloud(true);aiReply.text="حُذفت المحادثة من ذاكرة التطبيق.";showStatus("حُذف سياق AI المحلي؛ لا يعني ذلك حذف بيانات لدى مزود الخدمة.",false)}
+        content=controlPage
+        heading(content,"التحكم في جهازك","إجراءات تختارها أنت، بالصلاحيات الموجودة")
+        val device=card();content=device
+        heading(content,"تنقل وتحكم","تتطلب أزرار التنقل تفعيل خدمة الوصول الحالية")
+        val controls=listOf("رجوع" to "ارجع","الشاشة الرئيسية" to "الرئيسية","التطبيقات الأخيرة" to "التطبيقات الأخيرة","افتح الإشعارات" to "افتح الإشعارات","الإعدادات السريعة" to "الإعدادات السريعة","تمرير لأعلى" to "اطلع","تمرير لأسفل" to "انزل")
+        controls.forEach{(title,command)->addButton(title,true){createPlan(command);runNext()}}
+        addButton("لوحة التحكم العائمة",true){accessibilityDialog()}
+        content=controlPage
+        val tools=card();content=tools;heading(content,"أدوات وتواصل")
+        addButton("تجهيز رسالة أو مكالمة",true){communicationComposer()}
+        addButton("فتح إعدادات الهاتف",true){createPlan("افتح الإعدادات");runNext()}
+        addButton("فتح تطبيق الكاميرا",true){createPlan("افتح الكاميرا");runNext()}
+        addButton("جهات الاتصال والألقاب",true){contactsDialog()}
         content=historyPage
         heading(content,"سجل مهامك","نشاطك في مكان واحد، محفوظ على جهازك")
         history=label("",14f).apply{setTextColor(muted)};content.addView(history)
@@ -273,7 +294,7 @@ class MainActivity : Activity() {
         val access=card();content=access
         heading(content,"الوصول والتحكم")
         addButton("الصلاحيات وحالة الجهاز",true){permissionsDialog()}
-        addButton("جهات الاتصال والألقاب",true){contactsDialog()}
+        addButton("إدارة الألقاب المحلية",true){contactsDialog()}
         addButton("التحكم بالتطبيقات • Accessibility",true){accessibilityDialog()}
         content=settingsPage
         val privacy=card();content=privacy
@@ -286,10 +307,10 @@ class MainActivity : Activity() {
                     input.text.clear();updateHistory();showStatus("حُذفت البيانات المحلية.",false)
                 }.show()
         }.setTextColor(Color.rgb(255,163,163))
-        settingsPage.addView(label("مساعدي AI · 0.6.0-preview\nنسخة تجربة • أوامرك بإذنك",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;setPadding(0,dp(20),0,dp(8))})
+        settingsPage.addView(label("مساعدي AI · 0.7.0-personal\nنسخة تجربة • أوامرك بإذنك",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;setPadding(0,dp(20),0,dp(8))})
         val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(dp(14),dp(10),dp(14),dp(10));background=shape(navy,0,line)}
-        listOf("المساعد","السجل","الإعدادات").forEachIndexed { i,title ->
-            val b=button(title,true){selectPage(i)}.apply{contentDescription="افتح $title"}
+        listOf("المساعد","التحكم","السجل","الإعدادات").forEachIndexed { i,title ->
+            val b=button(title,true){selectPage(i)}.apply{contentDescription="افتح $title";textSize=12f;setPadding(dp(3),dp(12),dp(3),dp(12))}
             navButtons.add(b);nav.addView(b,LinearLayout.LayoutParams(0,-2,1f).apply{marginStart=dp(3);marginEnd=dp(3)})
         }
         root.addView(nav);content=home;selectPage(0)
@@ -337,7 +358,7 @@ class MainActivity : Activity() {
         if(!::preview.isInitialized)return
         cancelCloud(false)
         if(log && index<plan.size)record("أُلغيت الخطوات المتبقية")
-        planGeneration++;resolving=false;plan=emptyList();index=0;pending=null;gate.invalidate();handler.removeCallbacksAndMessages(null)
+        planGeneration++;resolving=false;executing=false;plan=emptyList();index=0;pending=null;gate.invalidate();handler.removeCallbacksAndMessages(null)
         dialog?.dismiss();dialog=null
         progress.text="خطتك القادمة"
         preview.text="لا توجد خطة نشطة. اكتب طلبك وراجعه لتظهر الخطوات هنا."
@@ -359,6 +380,8 @@ class MainActivity : Activity() {
         Action.WHATSAPP -> if(step.sensitive)"مسودة واتساب إلى ${step.recipient}" else "فتح واتساب"
         Action.DIAL -> "اتصال إلى ${step.recipient}"
         Action.SMS -> "مسودة SMS إلى ${step.recipient}"
+        Action.RECENTS -> "عرض التطبيقات الأخيرة";Action.NOTIFICATIONS -> "فتح الإشعارات";Action.QUICK_SETTINGS -> "فتح الإعدادات السريعة"
+        Action.SETTINGS -> "فتح إعدادات الهاتف";Action.CAMERA -> "فتح تطبيق الكاميرا";Action.WEB_SEARCH -> "البحث عن ${step.query}"
         Action.BACK -> "رجوع";Action.HOME -> "الرئيسية";Action.SCROLL_UP -> "تمرير لأعلى";Action.SCROLL_DOWN -> "تمرير لأسفل"
         else -> "غير مدعوم"
     }
@@ -369,6 +392,7 @@ class MainActivity : Activity() {
     }
     private fun runNext() {
         if(!resumed || locked()) { showStatus("افتح قفل الجهاز قبل التنفيذ.");return }
+        if(executing){showStatus("الإجراء الحالي لم ينتهِ بعد.",false);return}
         if(resolving){showStatus("انتظر اختيار المستلم أو ألغِ الخطة.",false);return}
         if(pending!=null) { showStatus("أكد الإجراء الحالي أو ألغِه أولًا.");return }
         val step=plan.getOrNull(index)?:run{showStatus("لا توجد خطوات متبقية.");return}
@@ -385,7 +409,7 @@ class MainActivity : Activity() {
     }
     private fun resolve(target:String,done:(Contact)->Unit) {
         CommandParser.phone(target)?.let { done(Contact(target,it));return }
-        val aliases=JSONObject(prefs.getString("aliases","{}")?:"{}")
+        val aliases=LocalData.aliases(prefs.getString("aliases","{}"))
         val saved=aliases.optJSONObject(CommandParser.normalize(target))
         if(saved!=null) { done(Contact(saved.getString("name"),saved.getString("phone")));return }
         if(checkSelfPermission(Manifest.permission.READ_CONTACTS)!=PackageManager.PERMISSION_GRANTED) {
@@ -426,7 +450,14 @@ class MainActivity : Activity() {
         confirm.text=if(step.action==Action.DIAL)"أكد الاتصال: ${contact.name} • ${contact.phone}" else "أكد فتح المسودة: ${contact.name} • ${contact.phone}"
         confirm.visibility=View.VISIBLE;progress.setText(R.string.confirmation_waiting);selectPage(0);showStatus(message)
         pages[0].post{pages[0].smoothScrollTo(0,taskCard.top)}
-        handler.postDelayed({if(pending?.id==item.id){pending=null;gate.invalidate();confirm.visibility=View.GONE;renderPlan();showStatus("انتهت مهلة التأكيد؛ لم يتم تنفيذ الإجراء.")}},30_000)
+        confirmationCountdown(item.id,SystemClock.elapsedRealtime()+30_000)
+    }
+    private fun confirmationCountdown(id:String,deadline:Long) {
+        if(pending?.id!=id)return
+        val remaining=deadline-SystemClock.elapsedRealtime()
+        if(remaining<=0){pending=null;gate.invalidate();confirm.visibility=View.GONE;renderPlan();showStatus("انتهت مهلة التأكيد؛ لم يتم تنفيذ الإجراء.");return}
+        progress.text=getString(R.string.confirmation_countdown,((remaining+999)/1000).toInt())
+        handler.postDelayed({confirmationCountdown(id,deadline)},1000)
     }
     private fun confirmPending() {
         val item=pending?:return
@@ -445,6 +476,9 @@ class MainActivity : Activity() {
                 actionIntent=Intent(AlarmClock.ACTION_SET_ALARM).putExtra(AlarmClock.EXTRA_HOUR,step.hour!!).putExtra(AlarmClock.EXTRA_MINUTES,step.minute!!).putExtra(AlarmClock.EXTRA_MESSAGE,"منبه مساعدي AI")
                 result="أُرسل طلب المنبه لتطبيق الساعة؛ تحقق من ضبطه هناك."
             }
+            Action.SETTINGS -> {actionIntent=Intent(Settings.ACTION_SETTINGS);result="فُتحت إعدادات الهاتف؛ أي تغيير يتم منك داخل النظام."}
+            Action.CAMERA -> {actionIntent=Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA);result="فُتح طلب تطبيق الكاميرا؛ لم يُلتقط أو يُرسل شيء."}
+            Action.WEB_SEARCH -> {actionIntent=Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/search?q=${Uri.encode(step.query)}"));result="فُتح البحث في المتصفح؛ قد يحتاج الإنترنت."}
             Action.YOUTUBE -> {actionIntent=packageManager.getLaunchIntentForPackage("com.google.android.youtube");result="فُتح يوتيوب."}
             Action.WHATSAPP -> {
                 if(contact==null)actionIntent=packageManager.getLaunchIntentForPackage("com.whatsapp")
@@ -464,13 +498,13 @@ class MainActivity : Activity() {
                 actionIntent=Intent(Intent.ACTION_SENDTO,Uri.fromParts("smsto",contact.phone,null)).putExtra("sms_body",step.message)
                 result="فُتحت مسودة SMS فقط. اختر الشريحة وراجع التكلفة ثم أرسل بنفسك."
             }
-            Action.BACK,Action.HOME,Action.SCROLL_UP,Action.SCROLL_DOWN -> {
+            Action.BACK,Action.HOME,Action.SCROLL_UP,Action.SCROLL_DOWN,Action.RECENTS,Action.NOTIFICATIONS,Action.QUICK_SETTINGS -> {
                 external=false
                 val service=AssistantAccessibilityService.current
                 if(service==null){showStatus("فعّل خدمة التحكم من إعدادات Accessibility أولًا.");return}
-                val epoch=planGeneration
+                val epoch=planGeneration;executing=true
                 service.execute(step.action){ok->runOnUiThread{
-                    if(epoch==planGeneration){if(ok)complete("طلب تحكم نُفّذ؛ تحقق من الواجهة.")else showStatus("لم ينفذ النظام إجراء التحكم؛ توقفت الخطة.")}
+                    if(epoch==planGeneration){executing=false;if(ok)complete("طلب تحكم نُفّذ؛ تحقق من الواجهة.")else showStatus("لم ينفذ النظام إجراء التحكم؛ توقفت الخطة.")}
                 }}
             }
             else -> {showStatus("إجراء غير مدعوم.");return}
@@ -488,14 +522,14 @@ class MainActivity : Activity() {
         showStatus(message+if(index<plan.size)" ارجع لمساعدي واضغط التالي عند التأكد من اكتمال الخطوة." else " انتهت الخطة.",false)
     }
     private fun record(summary:String) {
-        val list=JSONArray(prefs.getString("history","[]")?:"[]")
+        val list=LocalData.history(prefs.getString("history","[]"),System.currentTimeMillis())
         val next=JSONArray();next.put(JSONObject().put("time",System.currentTimeMillis()).put("summary",summary))
         for(i in 0 until minOf(list.length(),99)){val item=list.getJSONObject(i);if(System.currentTimeMillis()-item.optLong("time")<30L*24*60*60*1000)next.put(item)}
         prefs.edit().putString("history",next.toString()).apply();updateHistory()
     }
     private fun updateHistory() {
         if(!::history.isInitialized)return
-        val list=JSONArray(prefs.getString("history","[]")?:"[]");val valid=JSONArray()
+        val list=LocalData.history(prefs.getString("history","[]"),System.currentTimeMillis());val valid=JSONArray()
         for(i in 0 until list.length()){val item=list.getJSONObject(i);if(System.currentTimeMillis()-item.optLong("time")<30L*24*60*60*1000)valid.put(item)}
         prefs.edit().putString("history",valid.toString()).apply()
         history.text=if(valid.length()==0)"لا توجد أنشطة حتى الآن." else "${valid.length()} نشاط محفوظ · آخر 30 يومًا"
@@ -530,14 +564,14 @@ class MainActivity : Activity() {
             .setPositiveButton("حفظ") { _,_->
                 val phone=CommandParser.phone(number.text.toString());val key=CommandParser.normalize(alias.text.toString())
                 if(phone==null || key.isBlank() || name.text.isBlank()){showStatus("أدخل لقبًا واسمًا ورقمًا صحيحًا.");return@setPositiveButton}
-                val obj=JSONObject(prefs.getString("aliases","{}")?:"{}");obj.put(key,JSONObject().put("name",name.text.toString()).put("phone",phone));prefs.edit().putString("aliases",obj.toString()).apply()
+                val obj=LocalData.aliases(prefs.getString("aliases","{}"));obj.put(key,JSONObject().put("name",name.text.toString()).put("phone",phone));prefs.edit().putString("aliases",obj.toString()).apply()
                 showStatus("تم حفظ اللقب محليًا.",false)
             }.show()
     }
     private fun accessibilityDialog() {
         voice.stop()
         AlertDialog.Builder(this).setTitle("تحكم محدود وبإذنك")
-            .setMessage("الخدمة تنفذ رجوع والرئيسية والتمرير فقط عبر أزرار تضغطها أو أوامر واضحة. لا تقرأ محتوى الشاشة ولا تنقر إرسال ولا تخطط لأفعال مستقلة. لوحة عائمة اختيارية تتيح التحكم أثناء فتح التطبيقات. فعّل الخدمة يدويًا من Android بعد الموافقة، وأوقفها من هناك متى شئت.")
+            .setMessage("الخدمة تنفذ الرجوع والرئيسية والتطبيقات الأخيرة والإشعارات والإعدادات السريعة والتمرير عبر أزرار تضغطها أو أوامر واضحة. لا تقرأ محتوى الشاشة ولا تنقر إرسال ولا تنفذ أفعالًا مستقلة. يمكنك سحب لوحة التحكم أو طيها. لوحة عائمة اختيارية تتيح التحكم أثناء فتح التطبيقات. فعّل الخدمة يدويًا من Android بعد الموافقة، وأوقفها من هناك متى شئت.")
             .setNegativeButton("إلغاء",null)
             .setNeutralButton("إظهار/إخفاء اللوحة") { _,_->
                 val service=AssistantAccessibilityService.current
@@ -546,29 +580,32 @@ class MainActivity : Activity() {
             .setPositiveButton("أوافق، افتح إعدادات التفعيل") { _,_->startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }.show()
     }
     private fun cancelCloud(clearHistory:Boolean) {
-        cloudGeneration++;cloud.cancel()
+        cloudGeneration++;cloudRequest?.cancel();cloudRequest=null;cloud.cancel()
         if(clearHistory){chatContext.clear();if(::aiReply.isInitialized)aiReply.text="ابدأ محادثة جديدة. السياق السابق غير محفوظ."}
     }
-    private fun requestAi(text:String) {
+    private fun requestAi(text:String,planning:Boolean=false) {
         if(!resumed || locked()){showStatus("افتح الجهاز قبل إرسال طلب AI.",false);return}
         if(text.isBlank() || text.length>2000){showStatus("اكتب سؤالًا من 1 إلى 2000 حرف.",false);return}
         voice.stop();cancelPlan(false)
         if(!tokens.hasKey()){showStatus("أضف مفتاح API الشخصي من الإعدادات ← إعداد اتصال AI. الأوامر المحلية تعمل دون مفتاح.",false);return}
         val epoch=cloudGeneration
-        dialog=AlertDialog.Builder(this).setTitle("إرسال النص إلى OpenAI؟")
-            .setMessage("سيُرسل النص أدناه وما يصل إلى 8 رسائل من سياق محادثة AI الحالية إلى api.openai.com. لا نرفق الصوت أو جهات الاتصال أو سجل المهام. قد يُحتسب الاستخدام على حساب API. طلب عدم تخزين الرد ليس ضمانًا لانعدام احتفاظ المزود.\n\n$text")
+        dialog=AlertDialog.Builder(this).setTitle(if(planning)"اقتراح خطة عبر OpenAI؟" else "إرسال النص إلى OpenAI؟")
+            .setMessage("سيُرسل النص أدناه إلى api.openai.com. ${if(planning)"لا يُرفق سجل المحادثة. الاقتراح يخضع للمراجعة ولا ينفذ تلقائيًا." else "قد يُرفق آخر 8 رسائل من سياق محادثة AI الحالية."} لا نرفق الصوت أو جهات الاتصال أو سجل المهام. قد يُحتسب الاستخدام على حساب API. طلب عدم تخزين الرد ليس ضمانًا لانعدام احتفاظ المزود.\n\n$text")
             .setNegativeButton("إلغاء",null).setPositiveButton("أوافق، أرسل النص"){_,_->
                 if(epoch!=cloudGeneration || !resumed || locked())return@setPositiveButton
                 val key=try{tokens.read()}catch(_:Exception){showStatus("تعذر فتح المفتاح المحمي. أعد حفظه من الإعدادات.",false);return@setPositiveButton}
                 if(key.isBlank()){showStatus("مفتاح الخدمة غير متاح.",false);return@setPositiveButton}
                 val model=prefs.getString("cloud-model","gpt-4.1-mini")?:"gpt-4.1-mini"
                 val context=chatContext.toList();dialog=null
+                val request=CloudRequest();cloudRequest=request
                 selectPage(0);aiReply.setText(R.string.cloud_waiting);showStatus("جارٍ إرسال النص المأذون إلى خدمة AI…",false)
                 cloudWorker.execute{
                     try{
-                        val reply=cloud.answer(key,model,text,context)
+                        request.checkActive()
+                        val reply=cloud.answer(key,model,text,context,planning,request)
                         runOnUiThread{
                             if(epoch!=cloudGeneration || !resumed || locked())return@runOnUiThread
+                            if(planning){previewProposal(reply);return@runOnUiThread}
                             chatContext.add("user" to text);chatContext.add("assistant" to reply)
                             while(chatContext.size>8)chatContext.removeAt(0)
                             cloudState.text="نجح آخر طلب اتصال بالخدمة";aiReply.text=reply;showStatus("وصل رد AI؛ لم يُنفذ أي إجراء على الجهاز.",false);voice.say(reply)
@@ -609,6 +646,47 @@ class MainActivity : Activity() {
         }}
         config.show()
         config.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+    private fun updateReadiness(){
+        if(!::readiness.isInitialized)return
+        val mic=checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
+        val control=AssistantAccessibilityService.current!=null
+        readiness.text=listOf(if(mic)"الميكروفون جاهز" else "الكتابة جاهزة",if(control)"التحكم مفعّل" else "التحكم يحتاج تفعيلًا").joinToString(" · ")
+    }
+    private fun previewProposal(raw:String){
+        val proposed=DevicePlan.parse(raw)
+        if(proposed.error.isNotBlank()){showStatus(proposed.error,false);aiReply.text=proposed.error;return}
+        cancelPlan(false);plan=proposed.steps;index=0;renderPlan();selectPage(0)
+        aiReply.text="اقتُرحت خطة قابلة للمراجعة. لم يُنفذ أي إجراء؛ راجع المستلم والنص والوقت قبل المتابعة."
+        record("اقتراح خطة AI • ${plan.size} خطوة");showStatus("راجع خطة AI ثم اختر تنفيذ الخطوة التالية. التواصل يحتاج تأكيدًا مستقلًا.",false)
+        pages[0].post{pages[0].smoothScrollTo(0,taskCard.top)}
+    }
+    private fun communicationComposer(){
+        voice.stop();cancelPlan(false)
+        val form=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(10),dp(20),dp(6))}
+        val channel=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,arrayOf("SMS","WhatsApp","مكالمة هاتف"));form.addView(this)}
+        val recipient=EditText(this).apply{hint="اسم أو لقب محفوظ أو رقم دولي";contentDescription="مستلم الرسالة أو المكالمة";form.addView(this)}
+        val body=EditText(this).apply{hint="نص الرسالة دون علامات تنصيص";minLines=3;gravity=Gravity.TOP or Gravity.START;inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE;form.addView(this)}
+        channel.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{
+            override fun onNothingSelected(parent:AdapterView<*>?){}
+            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long){body.visibility=if(position==2)View.GONE else View.VISIBLE}
+        }
+        form.addView(label("سنجهز خطة للمراجعة. لا إرسال أو اتصال عند حفظ النموذج.",13f))
+        val sheet=AlertDialog.Builder(this).setTitle("تجهيز تواصل").setView(ScrollView(this).apply{addView(form)})
+            .setNegativeButton("إلغاء",null).setPositiveButton("مراجعة الخطة",null).create()
+        dialog=sheet
+        sheet.setOnShowListener{sheet.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val to=recipient.text.toString().trim();val message=body.text.toString()
+            if(to.isBlank()||to.length>120){recipient.error="حدد مستلمًا واضحًا";return@setOnClickListener}
+            if(channel.selectedItemPosition!=2 && (message.isBlank()||message.length>2000)){body.error="اكتب رسالة من 1 إلى 2000 حرف";return@setOnClickListener}
+            val action=listOf(Action.SMS,Action.WHATSAPP,Action.DIAL)[channel.selectedItemPosition]
+            sheet.dismiss();dialog=null;cancelPlan(false)
+            plan=listOf(ParsedCommand(action,recipient=to,message=if(action==Action.DIAL)"" else message));index=0
+            renderPlan();selectPage(0);record("خطة تواصل للمراجعة")
+            showStatus("راجع خطة التواصل؛ لم يُفتح تطبيق ولم تُرسل رسالة بعد.",false)
+            pages[0].post{pages[0].smoothScrollTo(0,taskCard.top)}
+        }}
+        sheet.show()
     }
     private fun infoDialog() {
         voice.stop()

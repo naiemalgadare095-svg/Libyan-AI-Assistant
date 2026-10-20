@@ -34,7 +34,7 @@ class MainActivityTest {
     private fun pending():Any? = MainActivity::class.java.getDeclaredField("pending").apply{isAccessible=true}.get(activity)
     private fun smsPlan() { makePlan("send SMS to +218912345678 \"hello\"");button("نفّذ الخطوة").performClick() }
     @Test fun launchesAndShowsHonestVersionAndLocalPrivacy() {
-        assertTrue(text().contains("0.6.0"));assertTrue(text().contains("لا تُحفظ نصوص"))
+        assertTrue(text().contains("0.7.0"));assertTrue(text().contains("لا تُحفظ نصوص"))
     }
     @Test fun planDoesNotLaunchExternalApp() {
         makePlan("افتح يوتيوب ثم افتح واتساب")
@@ -88,6 +88,31 @@ class MainActivityTest {
         context.add("user" to "private test question")
         controller.pause();assertTrue(context.isEmpty());controller.resume()
     }
+    @Test fun proposedPlanDoesNotExecuteAutomatically(){
+        val raw="""{"steps":[{"action":"SMS","recipient":"+218912345678","message":"hello","hour":null,"minute":null,"query":null}],"clarification":""}"""
+        MainActivity::class.java.getDeclaredMethod("previewProposal",String::class.java).apply{isAccessible=true}.invoke(activity,raw)
+        assertNull(shadowOf(activity).nextStartedActivity);assertNull(pending())
+        assertEquals(View.VISIBLE,button("نفّذ الخطوة").visibility)
+        button("نفّذ الخطوة").performClick();assertNotNull(pending());assertNull(shadowOf(activity).nextStartedActivity)
+    }
+    @Test fun communicationFormNeedsReviewAndConfirmation(){
+        button("تجهيز رسالة أو مكالمة").performClick()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        val form=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        val fields=views(form.window!!.decorView).filterIsInstance<EditText>()
+        fields[0].setText("+218912345678");fields[1].setText("بدون علامات تنصيص")
+        form.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        assertNull(shadowOf(activity).nextStartedActivity);assertNull(pending())
+        button("نفّذ الخطوة").performClick();assertNotNull(pending())
+    }
+    @Test fun malformedStoredDataDoesNotCrashOnReopen(){
+        activity.getSharedPreferences("assistant-local",0).edit().putString("history","broken").putString("aliases","broken").commit()
+        MainActivity::class.java.getDeclaredMethod("updateHistory").apply{isAccessible=true}.invoke(activity)
+        assertTrue(text().contains("لا توجد أنشطة"))
+    }
+    @Test fun systemSettingsUseExistingSystemIntent(){makePlan("افتح الإعدادات");button("نفّذ الخطوة").performClick();assertEquals(android.provider.Settings.ACTION_SETTINGS,shadowOf(activity).nextStartedActivity.action)}
+    @Test fun cameraOnlyOpensTheCameraApp(){makePlan("افتح الكاميرا");button("نفّذ الخطوة").performClick();assertEquals(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA,shadowOf(activity).nextStartedActivity.action)}
+    @Test fun searchIsEncodedAsAQueryNotArbitraryNavigation(){makePlan("ابحث عن javascript:alert(1)");button("نفّذ الخطوة").performClick();val intent=shadowOf(activity).nextStartedActivity;assertEquals("www.google.com",intent.data?.host);assertEquals("javascript:alert(1)",intent.data?.getQueryParameter("q"))}
     @Test fun contactAndMessageContentsAreAbsentFromStoredHistory() {
         smsPlan()
         val history=activity.getSharedPreferences("assistant-local",0).getString("history","").orEmpty()

@@ -1,3 +1,3 @@
 <resources><string name="accessibility_description">تنفيذ رجوع والرئيسية والتمرير فقط بأمر صريح من واجهة مساعدي. لا ينقر أزرار إرسال ولا يقرأ نص الشاشة ولا يعمل تلقائيًا. يمكن إيقاف الخدمة من إعدادات Android.</string><string name="confirmation_waiting">بانتظار تأكيدك · 30 ثانية</string><string name="cloud_not_configured">غير مفعّل: أضف مفتاح خدمة API الشخصي</string>
 <string name="cloud_waiting">جارٍ انتظار رد AI… يمكنك الإلغاء دون إعادة الطلب تلقائيًا.</string>
-<string name="cloud_saved_model">مفتاح محفوظ للنموذج %1$s؛ لم يُختبر اتصال حي بعد</string></resources>
+<string name="cloud_saved_model">مفتاح محفوظ للنموذج %1$s؛ لم يُختبر اتصال حي بعد</string><string name="confirmation_countdown">بانتظار تأكيدك · %1$d ثانية</string></resources>

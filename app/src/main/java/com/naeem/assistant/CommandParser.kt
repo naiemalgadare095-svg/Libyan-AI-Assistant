@@ -2,10 +2,10 @@ package com.naeem.assistant
 
 import java.text.Normalizer
 
-enum class Action { ALARM, YOUTUBE, WHATSAPP, DIAL, SMS, BACK, HOME, SCROLL_UP, SCROLL_DOWN, UNKNOWN }
+enum class Action { ALARM, YOUTUBE, WHATSAPP, DIAL, SMS, BACK, HOME, SCROLL_UP, SCROLL_DOWN, RECENTS, NOTIFICATIONS, QUICK_SETTINGS, SETTINGS, CAMERA, WEB_SEARCH, UNKNOWN }
 data class ParsedCommand(
     val action: Action, val hour: Int? = null, val minute: Int? = null,
-    val recipient: String = "", val message: String = "", val problem: String = ""
+    val recipient: String = "", val message: String = "", val problem: String = "", val query: String = ""
 ) {
     val sensitive get() = action == Action.DIAL || action == Action.SMS || (action == Action.WHATSAPP && recipient.isNotBlank())
 }
@@ -44,14 +44,23 @@ object CommandParser {
         return if (invalid != null) CommandPlan(emptyList(), invalid.problem.ifBlank { "لم أفهم إحدى الخطوات؛ لم يتم تنفيذ أي خطوة." }) else CommandPlan(steps)
     }
 
-    fun parse(input: String): ParsedCommand {
+    fun parse(original: String): ParsedCommand {
+        val input=WakePhrase.strip(original)?:original
         val s = normalize(input.takeWhile { it != '"' && it != '«' && it != '“' }).removePrefix("يا مساعدي ").trim()
         fun bad(text: String) = ParsedCommand(Action.UNKNOWN, problem = text)
+        val system=mapOf("افتح الاشعارات" to Action.NOTIFICATIONS,"الاشعارات" to Action.NOTIFICATIONS,"notifications" to Action.NOTIFICATIONS,
+            "التطبيقات الاخيرة" to Action.RECENTS,"افتح التطبيقات الاخيرة" to Action.RECENTS,"recent apps" to Action.RECENTS,
+            "الاعدادات السريعة" to Action.QUICK_SETTINGS,"افتح الاعدادات السريعة" to Action.QUICK_SETTINGS,"quick settings" to Action.QUICK_SETTINGS,
+            "افتح الاعدادات" to Action.SETTINGS,"open settings" to Action.SETTINGS,"افتح الكاميرا" to Action.CAMERA,"open camera" to Action.CAMERA)
+        system[s]?.let{return ParsedCommand(it)}
+        val search=Regex("^(?:ابحث عن|دور علي|دور على|search for)\\s+(.+)$").find(s)
+        if(search!=null)return ParsedCommand(Action.WEB_SEARCH,query=search.groupValues[1].take(500))
         if (s.matches(Regex("(?:ارجع|رجوع|back|go back)"))) return ParsedCommand(Action.BACK)
         if (s.matches(Regex("(?:الرئيسية|الشاشه الرئيسية|الشاشة الرئيسية|home|go home)"))) return ParsedCommand(Action.HOME)
         if (s.matches(Regex("(?:انزل|مرر لاسفل|scroll down)"))) return ParsedCommand(Action.SCROLL_DOWN)
         if (s.matches(Regex("(?:اطلع|مرر لاعلي|scroll up)"))) return ParsedCommand(Action.SCROLL_UP)
         if (Regex("^(?:(?:ديرلي|دير|اضبط|ضبط|set)\\s+)?(?:منبه|المنبه|نبهني|alarm)(?:\\s|$)").containsMatchIn(s)) {
+            if(Regex("\\d{1,2}[:٫.]\\d{1,2}").findAll(s).count()>1)return bad("حدد وقتًا واحدًا لكل منبه.")
             val clock = Regex("(?<!\\d)(\\d{1,2})[:٫.](\\d{1,2})(?!\\d)").find(s)
             val raw = clock?.groupValues?.get(1)?.toIntOrNull()
                 ?: Regex("(?:الساعه|الساعة|ساعة|at)\\s*(\\d{1,2})(?!\\d)").find(s)?.groupValues?.get(1)?.toIntOrNull()
@@ -73,7 +82,8 @@ object CommandParser {
             val rawQuote = Regex("[\"«“](.*)[\"»”]\\s*$").find(input)
                 ?: return bad("ضع نص الرسالة بين علامتي تنصيص، مثل: ابعت SMS إلى أحمد \"بنتأخر\".")
             val prefix = normalize(input.substring(0,rawQuote.range.first)).removePrefix("يا مساعدي ")
-            val channel = if(wa) Action.WHATSAPP else if(Regex("sms|اس ام اس|رسالة نصية").containsMatchIn(prefix)) Action.SMS else return bad("حدد قناة الرسالة: SMS أو واتساب.")
+            val channelHeader=prefix.split(Regex("\\s+(?:الي|الى|لـ?|to)\\s+"),limit=2)[0]
+            val channel = if(Regex("واتساب|واتس اب|whatsapp").containsMatchIn(channelHeader)) Action.WHATSAPP else if(Regex("sms|اس ام اس|رسالة نصية").containsMatchIn(channelHeader)) Action.SMS else return bad("حدد قناة الرسالة: SMS أو واتساب.")
             val to = Regex("(?:الي|الى|لـ?|to)\\s+(.+)$").find(prefix)?.groupValues?.get(1)?.trim()
                 ?: return bad("حدد المستلم بوضوح: إلى أحمد أو to Sara.")
             if(rawQuote.groupValues[1].isBlank()) return bad("الرسالة فارغة.")
