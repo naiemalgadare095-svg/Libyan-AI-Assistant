@@ -25,3 +25,10 @@
 - v1.0.0: فقط بعد استيفاء معايير قبول وثيقة المتطلبات، وتوثيق القيود واعتماد أي تغيير في النطاق.
 
 المراجع: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer)، [قيود الخلفية](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)، [سياسة Accessibility](https://support.google.com/googleplay/android-developer/answer/10964491)، [SMS وسجل المكالمات](https://support.google.com/googleplay/android-developer/answer/10208820).
+
+
+## تحديث 0.6.0 الهجين
+
+أضيفت محادثة سحابية حرة بطلب نصي وموافقة صريحة لكل إرسال، مع سياق مؤقت ومفتاح شخصي مشفر. لا يستخدم رد النموذج لتنفيذ الجهاز. تم تصحيح كلمة التنبيه وحالات فشل TTS والخمول. يحتاج التفعيل مفتاح حساب API صالحًا؛ الاختبارات محلية بنقل وهمي، وليست إثبات تشغيل حي أو دقة لهجة.
+
+تبقى المسودات والإرسال اليدوي، والتقييد أثناء القفل والخلفية، وحدود محرك الصوت، وعدم إمكانية سحب أفعال نهائية حدودًا فعلية لا تزال قائمة. الحذف والاحتفاظ المحدود حماية للخصوصية لا عطلًا. لا يدعي هذا التحديث استيفاء جميع متطلبات v1.0.

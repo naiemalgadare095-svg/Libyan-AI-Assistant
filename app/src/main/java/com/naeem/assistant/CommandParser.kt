@@ -101,3 +101,11 @@ class ConfirmationGate {
         return ok
     }
 }
+
+
+object WakePhrase {
+    private val marks="[\\u064B-\\u065F\\u0670ـ]*"
+    private val words="يا مساعدي".split(" ").joinToString("\\s+"){word->word.map{if(it=='ي')"[يى]$marks" else "$it$marks"}.joinToString("")}
+    private val prefix=Regex("^\\s*$words(?=$|[\\s،,:.!؟?])[\\s،,:.!؟?]*")
+    fun strip(input:String):String?=prefix.find(input)?.let{input.substring(it.range.last+1).trim()}
+}

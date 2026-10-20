@@ -56,6 +56,13 @@ class MainActivity : Activity() {
     private lateinit var wake: Switch
     private lateinit var language: Spinner
     private lateinit var voice: VoiceSession
+    private lateinit var aiReply: TextView
+    private lateinit var cloudState: TextView
+    private val cloud=CloudAssistant()
+    private val cloudWorker=Executors.newSingleThreadExecutor()
+    private val chatContext=mutableListOf<Pair<String,String>>()
+    private var cloudGeneration=0
+    private val tokens by lazy { EncryptedTokenStore(this) }
     private val handler=Handler(Looper.getMainLooper())
     private val gate=ConfirmationGate()
     private val contactsWorker=Executors.newSingleThreadExecutor()
@@ -90,13 +97,14 @@ class MainActivity : Activity() {
     }
     override fun onPause() {
         resumed=false;planGeneration++;resolving=false
+        cancelCloud(true)
         gate.invalidate();pending=null;handler.removeCallbacksAndMessages(null)
         if(::confirm.isInitialized)confirm.visibility=View.GONE
         dialog?.dismiss();dialog=null
         if(::voice.isInitialized)voice.foreground(false)
         super.onPause()
     }
-    override fun onDestroy() { if(::voice.isInitialized)voice.close();contactsWorker.shutdownNow();handler.removeCallbacksAndMessages(null);super.onDestroy() }
+    override fun onDestroy() { if(::voice.isInitialized)voice.close();contactsWorker.shutdownNow();cloudWorker.shutdownNow();handler.removeCallbacksAndMessages(null);super.onDestroy() }
     private val muted=Color.rgb(159,179,197)
     private val surface=Color.rgb(20,34,50)
     private val line=Color.rgb(41,61,80)
@@ -168,7 +176,7 @@ class MainActivity : Activity() {
         }
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(22),dp(12),dp(22),dp(8))}
         header.addView(label("مساعدي",23f).apply{setTypeface(null,Typeface.BOLD)},LinearLayout.LayoutParams(0,-2,1f))
-        header.addView(label("AI  /  0.5.1",12f).apply{setTextColor(teal);textDirection=View.TEXT_DIRECTION_LTR;setTypeface(Typeface.MONOSPACE,Typeface.NORMAL)})
+        header.addView(label("AI  /  0.6.0",12f).apply{setTextColor(teal);textDirection=View.TEXT_DIRECTION_LTR;setTypeface(Typeface.MONOSPACE,Typeface.NORMAL)})
         root.addView(header)
         val frame=FrameLayout(this);root.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
         val home=newPage(frame);val historyPage=newPage(frame);val settingsPage=newPage(frame)
@@ -205,6 +213,7 @@ class MainActivity : Activity() {
             voice.stop();input.clearFocus();(getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0)
             createPlan(input.text.toString());pages[0].post { pages[0].smoothScrollTo(0,taskCard.top) }
         }
+        addButton("اسأل AI عن هذا النص",true){requestAi(input.text.toString())}
         content=home
         content.addView(label("جرّب طلبًا سريعًا",14f).apply{setTextColor(muted);setPadding(0,dp(18),0,dp(4))})
         val examples=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
@@ -223,12 +232,22 @@ class MainActivity : Activity() {
         confirm=addButton("أكد الإجراء المعروض"){confirmPending()}.apply{visibility=View.GONE}
         addButton("إلغاء الخطة الحالية",true){voice.stop();cancelPlan();showStatus("أُلغيت الخطوات المتبقية.",false)}
         content.addView(label("لا إرسال تلقائي للرسائل. راجع المستلم والنص داخل التطبيق الآخر.",12f).apply{setTextColor(muted)})
+        content=home
+        val conversation=card();content=conversation
+        heading(content,"محادثة AI","عبر الإنترنت بإذنك؛ لا تنفذ ردود AI إجراءات على الجهاز")
+        aiReply=label("اسأل من محرر الطلب. تُرسل رسالتك بعد موافقة منفصلة، وتبقى الأوامر الأساسية محلية.",15f).apply{setTextIsSelectable(true);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE};content.addView(aiReply)
+        addButton("مسح سياق المحادثة",true){cancelCloud(true);aiReply.text="حُذفت المحادثة من ذاكرة التطبيق.";showStatus("حُذف سياق AI المحلي؛ لا يعني ذلك حذف بيانات لدى مزود الخدمة.",false)}
         content=historyPage
         heading(content,"سجل مهامك","نشاطك في مكان واحد، محفوظ على جهازك")
         history=label("",14f).apply{setTextColor(muted)};content.addView(history)
         historyCards=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};content.addView(historyCards)
         content=settingsPage
         heading(content,"إعداداتك","اضبط الصوت والوصول بما يناسبك")
+        val hybrid=card();content=hybrid
+        heading(content,"الذكاء الاصطناعي الهجين","الأوامر محلية؛ المحادثة السحابية بالنص وبموافقة لكل طلب")
+        cloudState=label(if(tokens.hasKey())"مفتاح شخصي محفوظ؛ الاتصال لم يُختبر بعد" else "غير مفعّل: أضف مفتاح خدمة API الشخصي",13f).apply{setTextColor(muted)};content.addView(cloudState)
+        addButton("إعداد اتصال AI",true){cloudSettings()}
+        content=settingsPage
         val audio=card();content=audio
         heading(content,"الصوت والمحادثة","الاستماع يعمل أثناء بقاء التطبيق ظاهرًا")
         content.addView(label("لغة التعرف",14f))
@@ -263,11 +282,11 @@ class MainActivity : Activity() {
         addButton("حذف السجل والألقاب والبيانات المحلية",true){
             AlertDialog.Builder(this).setTitle("حذف البيانات المحلية؟").setMessage("يحذف السجل والألقاب والإعدادات. لا يحذف رسائل أرسلتها من تطبيق آخر.")
                 .setNegativeButton("إلغاء",null).setPositiveButton("حذف"){_,_->
-                    voice.stop();cancelPlan(false);prefs.edit().clear().apply();offline.isChecked=true;continuous.isChecked=false;wake.isChecked=false;language.setSelection(0)
+                    voice.stop();cancelPlan(false);tokens.clear();chatContext.clear();cloudState.setText(R.string.cloud_not_configured);aiReply.text="حُذف سياق المحادثة المحلي.";prefs.edit().clear().apply();offline.isChecked=true;continuous.isChecked=false;wake.isChecked=false;language.setSelection(0)
                     input.text.clear();updateHistory();showStatus("حُذفت البيانات المحلية.",false)
                 }.show()
         }.setTextColor(Color.rgb(255,163,163))
-        settingsPage.addView(label("مساعدي AI · 0.5.1-preview\nنسخة تجربة • أوامرك بإذنك",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;setPadding(0,dp(20),0,dp(8))})
+        settingsPage.addView(label("مساعدي AI · 0.6.0-preview\nنسخة تجربة • أوامرك بإذنك",12f).apply{setTextColor(muted);gravity=Gravity.CENTER;setPadding(0,dp(20),0,dp(8))})
         val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(dp(14),dp(10),dp(14),dp(10));background=shape(navy,0,line)}
         listOf("المساعد","السجل","الإعدادات").forEachIndexed { i,title ->
             val b=button(title,true){selectPage(i)}.apply{contentDescription="افتح $title"}
@@ -311,10 +330,12 @@ class MainActivity : Activity() {
             "التالي","نفذ التالي","next" -> { runNext();return }
         }
         // A new utterance always replaces the old plan and invalidates its approval.
-        input.setText(text);createPlan(text)
+        input.setText(text)
+        if(CommandParser.plan(text).error.isNotBlank() && tokens.hasKey())requestAi(text) else createPlan(text)
     }
     private fun cancelPlan(log:Boolean=true) {
         if(!::preview.isInitialized)return
+        cancelCloud(false)
         if(log && index<plan.size)record("أُلغيت الخطوات المتبقية")
         planGeneration++;resolving=false;plan=emptyList();index=0;pending=null;gate.invalidate();handler.removeCallbacksAndMessages(null)
         dialog?.dismiss();dialog=null
@@ -524,10 +545,75 @@ class MainActivity : Activity() {
             }
             .setPositiveButton("أوافق، افتح إعدادات التفعيل") { _,_->startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }.show()
     }
+    private fun cancelCloud(clearHistory:Boolean) {
+        cloudGeneration++;cloud.cancel()
+        if(clearHistory){chatContext.clear();if(::aiReply.isInitialized)aiReply.text="ابدأ محادثة جديدة. السياق السابق غير محفوظ."}
+    }
+    private fun requestAi(text:String) {
+        if(!resumed || locked()){showStatus("افتح الجهاز قبل إرسال طلب AI.",false);return}
+        if(text.isBlank() || text.length>2000){showStatus("اكتب سؤالًا من 1 إلى 2000 حرف.",false);return}
+        voice.stop();cancelPlan(false)
+        if(!tokens.hasKey()){showStatus("أضف مفتاح API الشخصي من الإعدادات ← إعداد اتصال AI. الأوامر المحلية تعمل دون مفتاح.",false);return}
+        val epoch=cloudGeneration
+        dialog=AlertDialog.Builder(this).setTitle("إرسال النص إلى OpenAI؟")
+            .setMessage("سيُرسل النص أدناه وما يصل إلى 8 رسائل من سياق محادثة AI الحالية إلى api.openai.com. لا نرفق الصوت أو جهات الاتصال أو سجل المهام. قد يُحتسب الاستخدام على حساب API. طلب عدم تخزين الرد ليس ضمانًا لانعدام احتفاظ المزود.\n\n$text")
+            .setNegativeButton("إلغاء",null).setPositiveButton("أوافق، أرسل النص"){_,_->
+                if(epoch!=cloudGeneration || !resumed || locked())return@setPositiveButton
+                val key=try{tokens.read()}catch(_:Exception){showStatus("تعذر فتح المفتاح المحمي. أعد حفظه من الإعدادات.",false);return@setPositiveButton}
+                if(key.isBlank()){showStatus("مفتاح الخدمة غير متاح.",false);return@setPositiveButton}
+                val model=prefs.getString("cloud-model","gpt-4.1-mini")?:"gpt-4.1-mini"
+                val context=chatContext.toList();dialog=null
+                selectPage(0);aiReply.setText(R.string.cloud_waiting);showStatus("جارٍ إرسال النص المأذون إلى خدمة AI…",false)
+                cloudWorker.execute{
+                    try{
+                        val reply=cloud.answer(key,model,text,context)
+                        runOnUiThread{
+                            if(epoch!=cloudGeneration || !resumed || locked())return@runOnUiThread
+                            chatContext.add("user" to text);chatContext.add("assistant" to reply)
+                            while(chatContext.size>8)chatContext.removeAt(0)
+                            cloudState.text="نجح آخر طلب اتصال بالخدمة";aiReply.text=reply;showStatus("وصل رد AI؛ لم يُنفذ أي إجراء على الجهاز.",false);voice.say(reply)
+                            pages[0].post{(aiReply.parent as? View)?.let{pages[0].smoothScrollTo(0,it.top)}}
+                        }
+                    }catch(error:Exception){
+                        runOnUiThread{
+                            if(epoch==cloudGeneration && resumed){
+                                val message=if(error is IllegalStateException)error.message?:"تعذر إكمال الطلب." else "تعذر الاتصال بخدمة AI. تحقق من الإنترنت ثم أعد المحاولة يدويًا."
+                                aiReply.text=message;showStatus(message,false)
+                            }
+                        }
+                    }
+                }
+            }.show()
+    }
+    private fun cloudSettings() {
+        voice.stop();cancelCloud(true)
+        val layout=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),0)}
+        layout.addView(label("مفتاحك الشخصي لهذا الهاتف فقط. يُحفظ مشفرًا بمفتاح Android Keystore، ولا يُضمّن في APK. تحتاج حساب API صالحًا ورصيدًا؛ لا تضع مفتاحًا مشتركًا لتوزيعه على آخرين.",14f))
+        val secret=EditText(this).apply{hint=if(tokens.hasKey())"اتركه فارغًا للاحتفاظ بالمفتاح" else "مفتاح API الشخصي";inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD;setAutofillHints(null);layout.addView(this)}
+        val model=EditText(this).apply{hint="اسم النموذج";setText(prefs.getString("cloud-model","gpt-4.1-mini"));layout.addView(this)}
+        val config=AlertDialog.Builder(this).setTitle("اتصال AI الشخصي").setView(layout)
+            .setNegativeButton("إلغاء",null).setNeutralButton("حذف المفتاح"){_,_->tokens.clear();chatContext.clear();cloudState.text="غير مفعّل: لا يوجد مفتاح محفوظ";showStatus("حُذف المفتاح المحلي. يمكنك إلغاء المفتاح نفسه من حساب مزود API.",false)}
+            .setPositiveButton("حفظ",null).create()
+        dialog=config
+        config.setOnDismissListener{secret.text.clear();if(dialog===config)dialog=null}
+        config.setOnShowListener{config.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val value=secret.text.toString().trim();val chosen=model.text.toString().trim()
+            if(!Regex("[A-Za-z0-9._-]{1,80}").matches(chosen)){model.error="اسم نموذج غير صحيح";return@setOnClickListener}
+            if(value.isBlank() && !tokens.hasKey()){secret.error="أدخل مفتاح API";return@setOnClickListener}
+            try{
+                if(value.isNotBlank())tokens.save(value)
+                prefs.edit().putString("cloud-model",chosen).apply();secret.text.clear()
+                cloudState.text=getString(R.string.cloud_saved_model,chosen)
+                config.dismiss();showStatus("حُفظت إعدادات AI. لن يُرسل أي نص قبل موافقتك.",false)
+            }catch(_:Exception){secret.error="تعذر الحفظ المحمي؛ لم نحفظ المفتاح كنص صريح."}
+        }}
+        config.show()
+        config.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
     private fun infoDialog() {
         voice.stop()
         AlertDialog.Builder(this).setTitle("أمثلة وحدود نسخة التجربة")
-            .setMessage("افتح يوتيوب ثم افتح واتساب\nديرلي منبه الساعة 6:30 الصبح\nاتصل على أحمد\ncall Sara\nابعت SMS إلى أحمد \"بنتأخر\"\nsend WhatsApp to Sara \"I am late\"\n\nقل: التالي، إلغاء، أو أكد الاتصال. الرسائل تُفتح كمسودات وتتطلب إرسالًا يدويًا. لا يوجد نموذج ذكاء اصطناعي حر أو محرك مخصص للهجة؛ التعرف حسب هاتفك. أثناء نطق الرد استخدم زر الإيقاف للمقاطعة. الوضع المحلي يحتاج Android 12+ ومحركًا يدعم اللغة. التنبيه «يا مساعدي» تجريبي داخل التطبيق ولمدة جلسة محدودة، وليس كشفًا دائمًا منخفض الطاقة. لا فتح تلقائي للقفل أو تنفيذ بالخلفية. التراجع يلغي الخطوات المتبقية فقط. لا تُحفظ نصوص الأوامر أو التسجيلات؛ السجل المختصر يحذف بعد 30 يومًا وبحد أقصى 100 حدث.")
+            .setMessage("افتح يوتيوب ثم افتح واتساب\nديرلي منبه الساعة 6:30 الصبح\nاتصل على أحمد\ncall Sara\nابعت SMS إلى أحمد \"بنتأخر\"\nsend WhatsApp to Sara \"I am late\"\n\nقل: التالي، إلغاء، أو أكد الاتصال. الرسائل تُفتح كمسودات وتتطلب إرسالًا يدويًا. محادثة AI السحابية متاحة بعد إعداد مفتاحك وموافقتك على إرسال النص؛ لا يوجد محرك صوت مخصص للهجة. التعرف الصوتي حسب هاتفك. أثناء نطق الرد استخدم زر الإيقاف للمقاطعة. الوضع المحلي يحتاج Android 12+ ومحركًا يدعم اللغة. التنبيه «يا مساعدي» تجريبي داخل التطبيق ولمدة جلسة محدودة، وليس كشفًا دائمًا منخفض الطاقة. لا فتح تلقائي للقفل أو تنفيذ بالخلفية. التراجع يلغي الخطوات المتبقية فقط. سياق محادثة AI في الذاكرة فقط ويُمسح عند الخروج. لا تُحفظ التسجيلات أو نصوص الأوامر في السجل؛ السجل المختصر يحذف بعد 30 يومًا وبحد أقصى 100 حدث.")
             .setPositiveButton("فهمت",null).show()
     }
 }

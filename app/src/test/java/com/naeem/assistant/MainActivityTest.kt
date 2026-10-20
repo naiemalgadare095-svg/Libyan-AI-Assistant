@@ -34,7 +34,7 @@ class MainActivityTest {
     private fun pending():Any? = MainActivity::class.java.getDeclaredField("pending").apply{isAccessible=true}.get(activity)
     private fun smsPlan() { makePlan("send SMS to +218912345678 \"hello\"");button("نفّذ الخطوة").performClick() }
     @Test fun launchesAndShowsHonestVersionAndLocalPrivacy() {
-        assertTrue(text().contains("0.5.1"));assertTrue(text().contains("لا تُحفظ نصوص"))
+        assertTrue(text().contains("0.6.0"));assertTrue(text().contains("لا تُحفظ نصوص"))
     }
     @Test fun planDoesNotLaunchExternalApp() {
         makePlan("افتح يوتيوب ثم افتح واتساب")
@@ -70,6 +70,23 @@ class MainActivityTest {
         smsPlan();button("إيقاف الصوت").performClick()
         assertNull(pending());assertEquals(View.GONE,button("نفّذ الخطوة").visibility)
         assertNull(shadowOf(activity).nextStartedActivity)
+    }
+    @Test fun cloudMessageWaitsForExplicitConsent() {
+        activity.getSharedPreferences("cloud-secret",0).edit().putString("ciphertext","test-placeholder-not-a-real-key").commit()
+        views().filterIsInstance<EditText>().first().setText("شنو الفرق بين القمر والشمس؟")
+        button("اسأل AI").performClick()
+        val consent=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(consent)
+        assertTrue(shadowOf(consent).message.toString().contains("api.openai.com"))
+        assertTrue(shadowOf(consent).message.toString().contains("شنو الفرق"))
+        consent.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick()
+        assertNull(shadowOf(activity).nextStartedActivity)
+    }
+    @Test fun cloudContextClearsWhenLeavingApp() {
+        val field=MainActivity::class.java.getDeclaredField("chatContext").apply{isAccessible=true}
+        @Suppress("UNCHECKED_CAST") val context=field.get(activity) as MutableList<Pair<String,String>>
+        context.add("user" to "private test question")
+        controller.pause();assertTrue(context.isEmpty());controller.resume()
     }
     @Test fun contactAndMessageContentsAreAbsentFromStoredHistory() {
         smsPlan()

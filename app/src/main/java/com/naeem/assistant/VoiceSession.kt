@@ -42,14 +42,14 @@ class VoiceSession(private val activity: Activity, private val status: (String)-
                 tts?.language = Locale.forLanguageTag("ar")
                 tts?.setOnUtteranceProgressListener(object: UtteranceProgressListener() {
                     override fun onStart(id:String?) {}
-                    override fun onDone(id:String?) { handler.post { if(id == "voice-$generation") schedule() } }
+                    override fun onDone(id:String?) { handler.post { if(id == "voice-$generation"){lastActivity=SystemClock.elapsedRealtime();schedule()} } }
                     @Deprecated("Android callback") override fun onError(id:String?) { onDone(id) }
                 })
             }
         }
     }
     fun foreground(value: Boolean) { foreground=value; if(!value) stop() }
-    fun localAvailable() = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(activity)
+    fun localAvailable() = Build.VERSION.SDK_INT >= 31 && runCatching{SpeechRecognizer.isOnDeviceRecognitionAvailable(activity)}.getOrDefault(false)
     fun start(local:Boolean, wakeWord:Boolean, loop:Boolean, locale:String) {
         stop()
         if(!foreground || activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
@@ -72,8 +72,9 @@ class VoiceSession(private val activity: Activity, private val status: (String)-
                 override fun onEvent(eventType:Int,params:Bundle?) {}
                 override fun onError(error:Int) {
                     if(token!=generation || !active || suspended) return
-                    busy=false; errors++
-                    if(error in listOf(SpeechRecognizer.ERROR_SPEECH_TIMEOUT,SpeechRecognizer.ERROR_NO_MATCH) && errors<4) schedule()
+                    busy=false
+                    if(error in listOf(SpeechRecognizer.ERROR_SPEECH_TIMEOUT,SpeechRecognizer.ERROR_NO_MATCH)) schedule()
+                    else if(error==SpeechRecognizer.ERROR_RECOGNIZER_BUSY && ++errors<3) schedule()
                     else stop("توقف الصوت (رمز $error). تحقق من المحرك واللغة والإذن ثم أعد المحاولة.")
                 }
                 override fun onResults(results:Bundle?) {
@@ -82,10 +83,11 @@ class VoiceSession(private val activity: Activity, private val status: (String)-
                     val heard=results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     val normalized=CommandParser.normalize(heard)
                     if(normalized in listOf("وقف","توقف","stop")) { stop("توقف الاستماع.");return }
-                    if(wake && !normalized.startsWith("يا مساعدي")) { schedule();return }
+                    val wakeTail=WakePhrase.strip(heard)
+                    if(wake && wakeTail==null) { schedule();return }
                     if(wake) {
                         wake=false
-                        val tail=heard.replaceFirst(Regex("^يا\\s+مساعدي[،,:]?\\s*"),"").trim()
+                        val tail=wakeTail.orEmpty()
                         if(tail.isBlank()) { lastActivity=SystemClock.elapsedRealtime();say("شنو تبي نديرلك؟");return }
                         deliver(tail)
                     } else deliver(heard)
@@ -112,18 +114,19 @@ class VoiceSession(private val activity: Activity, private val status: (String)-
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,false)
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,offline)
             })
-            handler.removeCallbacks(idle);handler.postDelayed(idle,60_000)
+            handler.removeCallbacks(idle);handler.postDelayed(idle,(60_000-(SystemClock.elapsedRealtime()-lastActivity)).coerceAtLeast(1))
         } catch(_:Exception) { busy=false;stop("فشل بدء الاستماع.") }
     }
     private fun schedule() { val token=generation;handler.postDelayed({if(token==generation)listen()},700) }
     fun say(text:String) {
         // Never allow recognizer to hear our synthesized confirmation as user input.
+        handler.removeCallbacks(idle)
         suspended=true;recognizer?.cancel();busy=false
         if(ttsReady && foreground) {
-            val localVoice=tts?.voices?.firstOrNull { !it.isNetworkConnectionRequired && it.locale.language==Locale.forLanguageTag(language).language }
+            val localVoice=runCatching { tts?.voices?.firstOrNull { !it.isNetworkConnectionRequired && it.locale.language==Locale.forLanguageTag(language).language } }.getOrNull()
             if(localVoice==null) { status(text+" (صوت محلي غير متاح)");schedule();return }
-            tts?.voice=localVoice
-            tts?.speak(text,TextToSpeech.QUEUE_FLUSH,null,"voice-$generation")
+            val result=runCatching{tts?.voice=localVoice;tts?.speak(text,TextToSpeech.QUEUE_FLUSH,null,"voice-$generation")}.getOrNull()
+            if(result!=TextToSpeech.SUCCESS){status(text+" (تعذر النطق؛ الرد متاح نصيًا)");schedule()}
         } else schedule()
     }
     fun stop(message:String?=null) {
